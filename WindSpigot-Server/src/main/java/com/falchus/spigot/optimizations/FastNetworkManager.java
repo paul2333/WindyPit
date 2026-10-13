@@ -6,6 +6,7 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import net.minecraft.server.NetworkManager;
 import net.minecraft.server.Packet;
+import net.minecraft.server.ChatComponentText;
 
 import java.util.ArrayList;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -50,16 +51,22 @@ public class FastNetworkManager {
 
 	public void queuePacket(Packet<?> packet, int trackerThread) {
 		if (packet == null) return;
+		Channel channel = networkManager.channel;
+		if (channel != null && !channel.isOpen()) return;
 		int queueIndex = Math.floorMod(trackerThread, queues.length);
 		queuedPackets.incrementAndGet();
 		if (queues[queueIndex].offer(packet)) {
 			return;
 		} else {
 			queuedPackets.decrementAndGet();
-			// Tracking packets are refreshed on the next tick. Dropping only when the
-			// bounded queue is saturated prevents an unbounded memory spiral while
-			// retaining the normal synchronous packet path for gameplay-critical sends.
+			// Spawn packets and relative movement deltas cannot safely be dropped:
+			// disconnect instead of letting the client continue with missing state.
 			droppedPackets.incrementAndGet();
+			if (channel != null) {
+				networkManager.close(new ChatComponentText("Connection overloaded; please reconnect."));
+			} else {
+				discardQueuedPackets();
+			}
 		}
 	}
 

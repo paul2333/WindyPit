@@ -23,4 +23,3 @@ A focused source sanity check passed for:
 - no async override or executor in `AsyncEntityTracker`.
 
 Verified on 2026-10-13 with Apache Maven 3.9.16 and Microsoft JDK 25.0.3: `mvn -B -ntp clean install` completed successfully, including 22 server tests with no failures or errors.
-
