@@ -112,7 +112,7 @@ public class Main {
 				// NachoSpigot end
 				// WindSpigot start - config
 				acceptsAll(asList("windspigot", "windspigot-settings"), "File for windspigot settings").withRequiredArg()
-				.ofType(File.class).defaultsTo(new File("windspigot.yml")).describedAs("Yml file");
+				.ofType(File.class).defaultsTo(new File("windypit.yml")).describedAs("Yml file");
 				// WindSpigot end
 			}
 		};

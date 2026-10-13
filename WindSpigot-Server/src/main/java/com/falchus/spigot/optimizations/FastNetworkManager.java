@@ -1,7 +1,6 @@
 package com.falchus.spigot.optimizations;
 
 import com.windpvp.windspigot.config.WindSpigotConfig;
-import com.google.common.collect.Queues;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
@@ -9,18 +8,27 @@ import net.minecraft.server.NetworkManager;
 import net.minecraft.server.Packet;
 
 import java.util.ArrayList;
-import java.util.Queue;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.BlockingQueue;
 
 public class FastNetworkManager {
 
 	private final NetworkManager networkManager;
-	private final Queue<Packet<?>>[] queues = new Queue[WindSpigotConfig.trackingThreads];
+	private final BlockingQueue<Packet<?>>[] queues;
+	private final AtomicLong queuedPackets = new AtomicLong();
+	private final AtomicLong droppedPackets = new AtomicLong();
 
 	public FastNetworkManager(NetworkManager networkManager) {
 		this.networkManager = networkManager;
-		for (int i = 0; i < queues.length; i++) {
-			queues[i] = Queues.newConcurrentLinkedQueue();
+		int queueCount = Math.max(1, WindSpigotConfig.trackingThreads);
+		int queueCapacity = Math.max(64, WindSpigotConfig.trackingQueueCapacity);
+		@SuppressWarnings("unchecked")
+		BlockingQueue<Packet<?>>[] configuredQueues = new BlockingQueue[queueCount];
+		for (int i = 0; i < configuredQueues.length; i++) {
+			configuredQueues[i] = new ArrayBlockingQueue<>(queueCapacity);
 		}
+		this.queues = configuredQueues;
 	}
 
 	public void writePacketLazily(Packet<?> packet, boolean flush) {
@@ -41,8 +49,17 @@ public class FastNetworkManager {
 	}
 
 	public void queuePacket(Packet<?> packet, int trackerThread) {
-		if (packet != null) {
-			queues[trackerThread].add(packet);
+		if (packet == null) return;
+		int queueIndex = Math.floorMod(trackerThread, queues.length);
+		queuedPackets.incrementAndGet();
+		if (queues[queueIndex].offer(packet)) {
+			return;
+		} else {
+			queuedPackets.decrementAndGet();
+			// Tracking packets are refreshed on the next tick. Dropping only when the
+			// bounded queue is saturated prevents an unbounded memory spiral while
+			// retaining the normal synchronous packet path for gameplay-critical sends.
+			droppedPackets.incrementAndGet();
 		}
 	}
 
@@ -53,9 +70,9 @@ public class FastNetworkManager {
 		ArrayList<Packet<?>> writing = new ArrayList<>();
 		Packet<?> packet;
 		for (int i = 0; i < queues.length; i++) {
-			Queue<Packet<?>> current = queues[i];
-			queues[i] = Queues.newConcurrentLinkedQueue();
+			BlockingQueue<Packet<?>> current = queues[i];
 			while ((packet = current.poll()) != null) {
+				queuedPackets.decrementAndGet();
 				writing.add(packet);
 			}
 		}
@@ -68,5 +85,24 @@ public class FastNetworkManager {
 			}
 			channel.flush();
 		});
+	}
+
+	/** Discards tracker packets when a connection closes before the next tick. */
+	public void discardQueuedPackets() {
+		for (BlockingQueue<Packet<?>> queue : queues) {
+			Packet<?> packet;
+			while ((packet = queue.poll()) != null) {
+				queuedPackets.decrementAndGet();
+			}
+		}
+	}
+
+	public int queuedPacketCount() {
+		long count = queuedPackets.get();
+		return count > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) Math.max(0L, count);
+	}
+
+	public long droppedPacketCount() {
+		return droppedPackets.get();
 	}
 }

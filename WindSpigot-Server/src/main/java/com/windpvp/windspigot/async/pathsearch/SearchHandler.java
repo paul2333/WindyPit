@@ -1,10 +1,8 @@
 package com.windpvp.windspigot.async.pathsearch;
 
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
-import com.windpvp.windspigot.async.AsyncUtil;
+import com.windpvp.windspigot.async.AsyncExecutionPolicy;
+import com.windpvp.windspigot.async.BoundedThreadPoolExecutor;
 import com.windpvp.windspigot.async.pathsearch.cache.SearchCacheEntryEntity;
 import com.windpvp.windspigot.async.pathsearch.cache.SearchCacheEntryPosition;
 import com.windpvp.windspigot.config.WindSpigotConfig;
@@ -17,14 +15,23 @@ import net.minecraft.server.PathEntity;
 public class SearchHandler {
 
 	private static SearchHandler INSTANCE;
-	private final ExecutorService executor = Executors.newFixedThreadPool(WindSpigotConfig.pathSearchThreads,
-			new ThreadFactoryBuilder().setNameFormat("WindSpigot Entity Path Search Thread %d").build());
+	private final BoundedThreadPoolExecutor executor;
 
 	public SearchHandler() {
+		if (AsyncExecutionPolicy.isEnabled(WindSpigotConfig.asyncPathSearches, false)) {
+			executor = new BoundedThreadPoolExecutor(
+					WindSpigotConfig.pathSearchThreads, WindSpigotConfig.pathSearchQueueCapacity,
+					new ThreadFactoryBuilder().setNameFormat("WindSpigot Entity Path Search Thread %d").setDaemon(true).build());
+		} else {
+			executor = null;
+		}
 		INSTANCE = this;
 	}
 
 	public void issueSearch(Entity targetEntity, AsyncNavigation navigation) {
+		if (!AsyncExecutionPolicy.isEnabled(WindSpigotConfig.asyncPathSearches, false)) {
+			return;
+		}
 		
 		final ChunkCache chunkCache = navigation.createChunkCache(true);
 		
@@ -38,16 +45,20 @@ public class SearchHandler {
 		final int finalY = MathHelper.floor(targetEntity.locY) + 1;
 		final int finalZ = MathHelper.floor(targetEntity.locZ);
 		
-		AsyncUtil.run(() -> {
+		Runnable task = () -> {
 			
-			PathEntity path = navigation.doPathSearch(chunkCache, finalX, finalY, finalZ);
-			SearchCacheEntryEntity cache = new SearchCacheEntryEntity(targetEntity, navigation.getEntity(), path);
+			try {
+				PathEntity path = navigation.doPathSearch(chunkCache, finalX, finalY, finalZ);
+				SearchCacheEntryEntity cache = new SearchCacheEntryEntity(targetEntity, navigation.getEntity(), path);
+				navigation.addEntry(cache);
+			} finally {
+				navigation.isSearching.set(false);
+			}
 
-			navigation.addEntry(cache);
-			
+		};
+		if (!executor.tryExecute(task)) {
 			navigation.isSearching.set(false);
-
-		}, executor);
+		}
 	}
 
 	public static SearchHandler getInstance() {
@@ -55,6 +66,9 @@ public class SearchHandler {
 	}
 
 	public void issueSearch(int x, int y, int z, AsyncNavigation navigation) {
+		if (!AsyncExecutionPolicy.isEnabled(WindSpigotConfig.asyncPathSearches, false)) {
+			return;
+		}
 
 		final ChunkCache chunkCache = navigation.createChunkCache(false);
 		
@@ -64,16 +78,42 @@ public class SearchHandler {
 		
 		navigation.isSearching.set(true);
 		
-		AsyncUtil.run(() -> {
+		Runnable task = () -> {
 			
-			PathEntity path = navigation.doPathSearch(chunkCache, x, y, z);
-			SearchCacheEntryPosition cache = new SearchCacheEntryPosition(x, y, z, navigation.getEntity(), path);
+			try {
+				PathEntity path = navigation.doPathSearch(chunkCache, x, y, z);
+				SearchCacheEntryPosition cache = new SearchCacheEntryPosition(x, y, z, navigation.getEntity(), path);
+				navigation.addEntry(cache);
+			} finally {
+				navigation.isSearching.set(false);
+			}
 
-			navigation.addEntry(cache);
-			
+		};
+		if (!executor.tryExecute(task)) {
 			navigation.isSearching.set(false);
+		}
+	}
 
-		}, executor);
+	public void shutdown() {
+		if (executor == null) {
+			return;
+		}
+		executor.shutdown();
+		try {
+			if (!executor.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
+				executor.shutdownNow();
+				if (!executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+					throw new IllegalStateException("Path-search workers did not terminate during shutdown");
+				}
+			}
+		} catch (InterruptedException interrupted) {
+			executor.shutdownNow();
+			Thread.currentThread().interrupt();
+		}
+	}
+
+	public BoundedThreadPoolExecutor.Metrics snapshotMetrics() {
+		return executor == null ? null : executor.snapshot();
 	}
 
 }

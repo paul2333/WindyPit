@@ -2,9 +2,12 @@ package com.windpvp.windspigot.config;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -19,6 +22,7 @@ import org.sugarcanemc.sugarcane.util.yaml.YamlCommenter;
 import com.google.common.base.Throwables;
 import com.google.common.collect.Lists;
 import com.windpvp.windspigot.WindSpigot;
+import com.windpvp.windspigot.async.AsyncExecutionPolicy;
 import com.windpvp.windspigot.async.pathsearch.AsyncNavigation;
 
 @SuppressWarnings("unused")
@@ -37,14 +41,33 @@ public class WindSpigotConfig {
 	static int version;
 
 	public static void init(File configFile) {
+		if (configFile == null) {
+			configFile = new File("windypit.yml");
+		}
+		if (isDefaultConfigFile(configFile) && !configFile.isFile()) {
+			File legacyConfigFile = new File(configFile.getAbsoluteFile().getParentFile(), "windspigot.yml");
+			if (legacyConfigFile.isFile()) {
+				LOGGER.info("Loading legacy WindSpigot settings from " + legacyConfigFile.getAbsolutePath());
+				configFile = legacyConfigFile;
+			}
+		}
 		CONFIG_FILE = configFile;
 		config = new YamlConfiguration();
 		try {
-			WindSpigot.LOGGER.info("Loading WindSpigot config from " + configFile.getName());
-			config.load(CONFIG_FILE);
+			WindSpigot.LOGGER.info("Loading WindSpigot config from " + CONFIG_FILE.getName());
+			if (CONFIG_FILE.isFile()) {
+				config.load(CONFIG_FILE);
+			} else if (isDefaultConfigFile(CONFIG_FILE)) {
+				try (InputStream defaults = WindSpigotConfig.class.getClassLoader()
+						.getResourceAsStream("windypit.yml")) {
+					if (defaults != null) {
+						config.load(new InputStreamReader(defaults, StandardCharsets.UTF_8));
+					}
+				}
+			}
 		} catch (IOException ignored) {
 		} catch (InvalidConfigurationException ex) {
-			LOGGER.log(Level.ERROR, "Could not load windspigot.yml, please correct your syntax errors", ex);
+			LOGGER.log(Level.ERROR, "Could not load " + CONFIG_FILE.getName() + ", please correct your syntax errors", ex);
 			throw Throwables.propagate(ex);
 		}
 		config.options().copyDefaults(true);
@@ -72,11 +95,15 @@ public class WindSpigotConfig {
 		} catch (Exception ex) {
 			LOGGER.log(Level.ERROR, "Could not save " + CONFIG_FILE, ex);
 			
-			LOGGER.warn("Please regenerate your windspigot.yml file to prevent this issue! The server will run with the default config for now.");
+			LOGGER.warn("Please regenerate your " + CONFIG_FILE.getName() + " file to prevent this issue! The server will run with the default config for now.");
 
 			makeReadable();
 		}
 		
+	}
+
+	private static boolean isDefaultConfigFile(File file) {
+		return "windypit.yml".equalsIgnoreCase(file.getName());
 	}
 	
 	// Not private as the config is read by calling all private methods with 0 params
@@ -115,7 +142,10 @@ public class WindSpigotConfig {
 		c.addComment("settings.command", "Configuration for WindSpigot's commands");
 		c.addComment("settings.async.entity-tracking.enable", "Enables multithreaded entity tracking");
 		c.addComment("settings.async.entity-tracking.threads", "The amount of threads used for async entity tracking per world, increase or decrease this based on your server load.");
+		c.addComment("settings.async.entity-tracking.queue-capacity", "Maximum queued tracker packets per connection and tracker shard before refreshed tracking packets are dropped.");
 		c.addComment("settings.async.entity-tracking", "Configuration for the async entity tracker.");
+		c.addComment("settings.async.explosions.queue-capacity", "Maximum queued async explosion density calculations before background work is rejected (1-4096).");
+		c.addComment("settings.async.path-searches.queue-capacity", "Maximum queued async path searches before background work is rejected (1-4096).");
 		c.addComment("settings.thread-affinity", "Only switch to true if your OS is properly configured!! (See https://github.com/OpenHFT/Java-Thread-Affinity#isolcpus) \nWhen properly configured on the OS this allocates an entire cpu core to the server, it improves performance but uses more cpu.");
 		c.addComment("settings.command.mob-ai", "Enables the command \"/mobai\" which toggles mob ai. Users require the permission windspigot.command.mobai");
 		c.addComment("settings.pearl-passthrough.fence-gate", "Allows pearls to pass through fences.");
@@ -219,6 +249,18 @@ public class WindSpigotConfig {
 		return config.getInt(path, config.getInt(path));
 	}
 
+	private static int getBoundedInt(String path, int def, int min, int max) {
+		int value = getInt(path, def);
+		if (value < min || value > max) {
+			int corrected = value < min ? def : max;
+			LOGGER.warn("Configuration " + path + "=" + value + " is outside " + min + ".." + max
+					+ "; using " + corrected + " instead.");
+			set(path, corrected);
+			return corrected;
+		}
+		return value;
+	}
+
 	private static <T> List getList(String path, T def) {
 		config.addDefault(path, def);
 		return config.getList(path, config.getList(path));
@@ -230,11 +272,13 @@ public class WindSpigotConfig {
 	}
 	
 	public static boolean disableTracking;
-	public static int trackingThreads;
+	public static int trackingThreads = 2;
+	public static int trackingQueueCapacity = 4096;
 
 	private static void tracking() {
 		disableTracking = !getBoolean("settings.async.entity-tracking.enable", true);
-		trackingThreads = getInt("settings.async.entity-tracking.threads", 4);
+		trackingThreads = getBoundedInt("settings.async.entity-tracking.threads", 4, 1, 32);
+		trackingQueueCapacity = getBoundedInt("settings.async.entity-tracking.queue-capacity", 4096, 64, 65536);
 	}
 
 	public static boolean threadAffinity;
@@ -310,7 +354,7 @@ public class WindSpigotConfig {
 	public static boolean statistics;
 	
 	private static void statistics() {
-		statistics = getBoolean("settings.statistics", true);
+		statistics = getBoolean("settings.statistics", false);
 	}
 	
 	public static int hitDelay;
@@ -340,11 +384,16 @@ public class WindSpigotConfig {
 	public static boolean asyncPathSearches;
 	public static int distanceToAsync;
 	public static int pathSearchThreads;
+	public static int pathSearchQueueCapacity;
 	public static boolean ensurePathSearchAccuracy;
 	
 	@SuppressWarnings("unchecked")
 	private static void asyncPathSearches() {
-		asyncPathSearches = getBoolean("settings.async.path-searches.enabled", true);
+		boolean requested = getBoolean("settings.async.path-searches.enabled", false);
+		asyncPathSearches = AsyncExecutionPolicy.isEnabled(requested, false);
+		if (requested) {
+			LOGGER.warn("Async path searches are disabled because ChunkCache and entity state are live mutable world data.");
+		}
 		
 		if (asyncPathSearches) {
 			List<String> asyncSearchEntities = getList("settings.async.path-searches.entities",
@@ -363,7 +412,8 @@ public class WindSpigotConfig {
 			distanceToAsync = getInt("settings.async.path-searches.distance-to-async", 0);
 			AsyncNavigation.setMinimumDistanceForOffloading(distanceToAsync);
 			
-			pathSearchThreads = getInt("settings.async.path-searches.threads", 4);
+			pathSearchThreads = getBoundedInt("settings.async.path-searches.threads", 4, 1, 32);
+			pathSearchQueueCapacity = getBoundedInt("settings.async.path-searches.queue-capacity", 128, 1, 4096);
 			ensurePathSearchAccuracy = getBoolean("settings.async.path-searches.ensure-accuracy", true);
 			
 		} 
@@ -413,10 +463,16 @@ public class WindSpigotConfig {
 	
 	public static boolean asyncTnt;
 	public static int fixedPoolSize;
+	public static int explosionQueueCapacity;
 	
 	private static void asyncExplosions() {
-		asyncTnt = getBoolean("settings.async.explosions.enable", true);
-		fixedPoolSize = getInt("settings.async.explosions.threads", 3);
+		boolean requested = getBoolean("settings.async.explosions.enable", false);
+		asyncTnt = AsyncExecutionPolicy.isEnabled(requested, false);
+		if (requested) {
+			LOGGER.warn("Async explosion density is disabled because it ray-traces and caches live world state.");
+		}
+		fixedPoolSize = getBoundedInt("settings.async.explosions.threads", 3, 1, 32);
+		explosionQueueCapacity = getBoundedInt("settings.async.explosions.queue-capacity", 128, 1, 4096);
 	}
 	
 	public static double maxReachSqrd;

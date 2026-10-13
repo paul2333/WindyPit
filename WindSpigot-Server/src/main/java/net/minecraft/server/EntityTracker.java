@@ -147,14 +147,14 @@ public class EntityTracker {
 	}
 
 	public void updatePlayers() {
+		int shardCount = Math.max(1, WindSpigotConfig.trackingThreads);
+		int shard = 0;
 		for (EntityTrackerEntry entry : c) {
-			entry.update();
+			// Keep Bukkit/NMS mutation synchronous, but spread packet queue ownership
+			// across configured tracker shards so one connection queue does not become
+			// the single hot queue for every entity.
+			entry.update(shard++ % shardCount);
 		}
-	    // WindSpigot start
-		for (EntityPlayer player : MinecraftServer.getServer().getPlayerList().players) {
-			player.playerConnection.sendQueuedPackets();
-		}
-        // WindSpigot end
 	}
 
 	public void a(EntityPlayer entityplayer) {

@@ -5,7 +5,6 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadLocalRandom;
 
 import org.bukkit.Location;
@@ -15,11 +14,8 @@ import org.bukkit.event.entity.EntityExplodeEvent;
 
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
-import com.windpvp.windspigot.async.AsyncUtil;
 import com.windpvp.windspigot.cache.Constants;
 import com.windpvp.windspigot.config.WindSpigotConfig;
-
-import xyz.sculas.nacho.async.AsyncExplosions;
 
 public class Explosion {
 
@@ -129,17 +125,10 @@ public class Explosion {
 						double finalD1 = d9;
 						double finalD11 = d10;
 
-						// WindSpigot start - toggleable async explosions
-						if (WindSpigotConfig.asyncTnt) {
-							this.getBlockDensityAsync(vec3d, entity.getBoundingBox())
-									.thenAccept((d12) -> AsyncUtil.runPostTick(() -> {
-										processEntityKnockback(entity, d7, finalD, finalD1, finalD11, f3, d12);
-									}));
-						} else {
-							processEntityKnockback(entity, d7, finalD, finalD1, finalD11, f3,
-									this.getBlockDensitySync(vec3d, entity.getBoundingBox()));
-						}
-						// WindSpigot end
+						// Density calculation reads live World/Chunk/Block state and must stay
+						// on the owner thread until an immutable snapshot implementation exists.
+						processEntityKnockback(entity, d7, finalD, finalD1, finalD11, f3,
+								this.getBlockDensitySync(vec3d, entity.getBoundingBox()));
 					}
 				}
 			}
@@ -431,20 +420,6 @@ public class Explosion {
 	// IonSpigot end
 
 	// Paper start - Optimize explosions
-	private CompletableFuture<Float> getBlockDensityAsync(Vec3D vec3d, AxisAlignedBB aabb) {
-		return CompletableFuture.supplyAsync(() -> {
-			// IonSpigot start - Optimise Density Cache
-			int key = createKey(this, aabb);
-			float blockDensity = this.world.explosionDensityCache.get(key);
-			if (blockDensity == -1.0f) {
-				blockDensity = calculateDensity(vec3d, aabb);
-				this.world.explosionDensityCache.put(key, blockDensity);
-			}
-			return blockDensity;
-		}, AsyncExplosions.EXECUTOR);
-	}
-	
-	// WindSpigot start - toggleable async explosions
 	private float getBlockDensitySync(Vec3D vec3d, AxisAlignedBB aabb) {
 		// IonSpigot start - Optimise Density Cache
 		int key = createKey(this, aabb);
@@ -455,7 +430,6 @@ public class Explosion {
 		}
 		return blockDensity;
 	}
-	// WindSpigot end
 
 	private float calculateDensity(Vec3D vec3d, AxisAlignedBB aabb) {
 		if (world.nachoSpigotConfig.reducedDensityRays) {

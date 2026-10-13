@@ -32,6 +32,7 @@ import com.mojang.authlib.minecraft.MinecraftSessionService;
 import com.mojang.authlib.yggdrasil.YggdrasilAuthenticationService;
 import com.windpvp.windspigot.WindSpigot;
 import com.windpvp.windspigot.config.WindSpigotConfig;
+import com.windpvp.windspigot.performance.TickPerformanceMonitor;
 import com.windpvp.windspigot.statistics.StatisticsClient;
 import com.windpvp.windspigot.world.WorldTickManager;
 
@@ -140,6 +141,7 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
 	
 	// WindSpigot - MSPT for tps command
 	private double lastMspt;
+	public final TickPerformanceMonitor performanceMonitor = new TickPerformanceMonitor();
 
 	public MinecraftServer(OptionSet options, Proxy proxy, File file1) {
 		super("Server"); // PandaSpigot - Modern Tick Loop
@@ -533,7 +535,11 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
 			}
 			// Spigot end
 
-			AsyncExplosions.stopExecutor(); // Nacho
+			if (WindSpigot.getInstance() != null) {
+				WindSpigot.getInstance().shutdown();
+			} else {
+				AsyncExplosions.stopExecutor(); // Nacho
+			}
 		}
 	}
 
@@ -560,6 +566,9 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
 	private static final long TICK_TIME = SEC_IN_NANO / TPS;
 	private static final long MAX_CATCHUP_BUFFER = TICK_TIME * TPS * 60L;
 	private static final int SAMPLE_INTERVAL = 20;
+	private static final int CPU_SAMPLE_INTERVAL = SAMPLE_INTERVAL * TickPerformanceMonitor.CPU_SAMPLE_PERIOD_SECONDS;
+	public final RollingAverage tps5s = new RollingAverage(5);
+	public final RollingAverage tps10s = new RollingAverage(10);
 	public final RollingAverage tps1 = new RollingAverage(60);
 	public final RollingAverage tps5 = new RollingAverage(60 * 5);
 	public final RollingAverage tps15 = new RollingAverage(60 * 15);
@@ -710,6 +719,8 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
 						//double currentTps = 1E9 / diff * SAMPLE_INTERVAL;
 						java.math.BigDecimal currentTps = TPS_BASE.divide(new java.math.BigDecimal(diff), 30, java.math.RoundingMode.HALF_UP); // PandaSpigot - Use BigDecimal to improve accuracy of TPS results
 
+						tps5s.add(currentTps, diff);
+						tps10s.add(currentTps, diff);
 						tps1.add(currentTps, diff);
 						tps5.add(currentTps, diff);
 						tps15.add(currentTps, diff);
@@ -719,6 +730,10 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
 						recentTps[2] = tps15.getAverage();
 						tickSection = curTime;
 						// PaperSpigot end
+					}
+					if (MinecraftServer.currentTick % CPU_SAMPLE_INTERVAL == 0) {
+						performanceMonitor.recordCpuLoad(TickPerformanceMonitor.readSystemCpuLoad(),
+								TickPerformanceMonitor.readProcessCpuLoad());
 					}
 					lastTick = curTime;
 
@@ -970,6 +985,7 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
         long endTime = getNanoTime();
         long remaining = (TICK_TIME - (endTime - lastTick));
         this.lastMspt = ((double) (endTime - lastTick) / 1000000D);
+		this.performanceMonitor.recordTickDuration(endTime - i);
         this.server.getPluginManager().callEvent(new com.destroystokyo.paper.event.server.ServerTickEndEvent(this.ticks, this.lastMspt, remaining));
         // Paper end
 		co.aikar.timings.TimingsManager.FULL_SERVER_TICK.stopTiming(); // Spigot

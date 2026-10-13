@@ -1,0 +1,21 @@
+# WindyPit defaults. All settings below are consumed by WindSpigotConfig.
+config-version: 29
+
+settings:
+  statistics: false
+  weather-change: false
+  use-tcp-nodelay: true
+  async:
+    entity-tracking:
+      enable: true
+      threads: 2
+      queue-capacity: 4096
+    knockback: true
+    explosions:
+      enable: false
+      threads: 2
+      queue-capacity: 128
+    path-searches:
+      enabled: false
+      threads: 2
+      queue-capacity: 128

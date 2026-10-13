@@ -1,7 +1,7 @@
 package com.windpvp.windspigot;
 
 import java.util.Set;
-import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
@@ -36,9 +36,7 @@ public class WindSpigot {
 	private static final Logger DEBUG_LOGGER = LogManager.getLogger();
 	private static WindSpigot INSTANCE;
 	
-	private final Executor statisticsExecutor = Executors
-			.newSingleThreadExecutor(new ThreadFactoryBuilder().setNameFormat("WindSpigot Statistics Thread")
-			.build());
+	private ExecutorService statisticsExecutor;
 	
 	private volatile boolean statisticsEnabled = false;
 	
@@ -98,7 +96,14 @@ public class WindSpigot {
 	}
 
 	private void initStatistics() {
+		// Statistics are deliberately opt-in for WindyPit. The legacy implementation
+		// starts a permanent network loop and is unrelated to ThePit gameplay.
+		if (!WindSpigotConfig.statistics) return;
 		if (WindSpigotConfig.statistics && !statisticsEnabled) {
+			statisticsExecutor = Executors.newSingleThreadExecutor(new ThreadFactoryBuilder()
+					.setNameFormat("WindSpigot Statistics Thread")
+					.setDaemon(true)
+					.build());
 			Runnable statisticsRunnable = (() -> {
 				client = new StatisticsClient();
 				try {
@@ -127,6 +132,28 @@ public class WindSpigot {
 			});
 			AsyncUtil.run(statisticsRunnable, statisticsExecutor);
 		}
+	}
+
+	/** Stops optional background services before the server closes its worlds. */
+	public void shutdown() {
+		StatisticsClient statistics = client;
+		if (statistics != null && statistics.isConnected) {
+			try {
+				statistics.stop();
+			} catch (Exception ignored) {
+				// The server is already stopping; executor shutdown remains authoritative.
+			}
+		}
+		ExecutorService executor = statisticsExecutor;
+		if (executor != null) {
+			executor.shutdownNow();
+			statisticsExecutor = null;
+		}
+		SearchHandler searchHandler = SearchHandler.getInstance();
+		if (searchHandler != null) {
+			searchHandler.shutdown();
+		}
+		AsyncExplosions.stopExecutor();
 	}
 
 	public static void init() {

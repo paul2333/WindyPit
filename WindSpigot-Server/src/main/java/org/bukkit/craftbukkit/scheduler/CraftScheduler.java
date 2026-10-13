@@ -5,12 +5,15 @@ import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.PriorityQueue;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 
@@ -82,9 +85,16 @@ public class CraftScheduler implements BukkitScheduler {
 	 */
 	private final ConcurrentHashMap<Integer, CraftTask> runners = new ConcurrentHashMap<Integer, CraftTask>();
 	private volatile int currentTick = -1;
-	private final Executor executor = Executors
-			.newCachedThreadPool(new com.google.common.util.concurrent.ThreadFactoryBuilder()
-					.setNameFormat("Craft Scheduler Thread - %1$d").build()); // Spigot
+	private static final long ASYNC_REJECTION_LOG_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30L);
+	private final AtomicInteger rejectedAsyncTaskCount = new AtomicInteger();
+	private final AtomicLong lastAsyncRejectionLogNanos = new AtomicLong();
+	private final ThreadPoolExecutor executor = new ThreadPoolExecutor(
+			Math.max(2, Math.min(Runtime.getRuntime().availableProcessors(), 8)),
+			Math.max(2, Math.min(Runtime.getRuntime().availableProcessors() * 2, 16)),
+			30L, TimeUnit.SECONDS,
+			new ArrayBlockingQueue<Runnable>(4096),
+			new com.google.common.util.concurrent.ThreadFactoryBuilder()
+					.setNameFormat("WindyPit Scheduler Thread - %1$d").setDaemon(true).build()); // bounded async scheduler
 	private CraftAsyncDebugger debugHead = new CraftAsyncDebugger(-1, null, null) {
 		@Override
 		StringBuilder debugTo(StringBuilder string) {
@@ -411,7 +421,11 @@ public class CraftScheduler implements BukkitScheduler {
 			} else {
 				debugTail = debugTail.setNext(
 						new CraftAsyncDebugger(currentTick + RECENT_TICKS, task.getOwner(), task.getTaskClass()));
-				executor.execute(task);
+				try {
+					executor.execute(task);
+				} catch (RejectedExecutionException rejected) {
+					rejectAsyncTask(task);
+				}
 				// We don't need to parse pending
 				// (async tasks must live with race-conditions if they attempt to cancel between
 				// these few lines of code)
@@ -427,6 +441,35 @@ public class CraftScheduler implements BukkitScheduler {
 		pending.addAll(temp);
 		temp.clear();
 		debugHead = debugHead.getNextHead(currentTick);
+	}
+
+	/**
+	 * Reject saturated async work without ever executing plugin code on the
+	 * submitting thread (which is normally the server thread). Cancelling the
+	 * CraftTask also removes an idle async task from the runners map and prevents
+	 * repeating tasks from being re-queued by mainThreadHeartbeat.
+	 */
+	private void rejectAsyncTask(final Runnable runnable) {
+		final CraftTask task = runnable instanceof CraftTask ? (CraftTask) runnable : null;
+		if (task != null) {
+			task.cancel0();
+		}
+
+		rejectedAsyncTaskCount.incrementAndGet();
+		final long now = System.nanoTime();
+		final long lastLog = lastAsyncRejectionLogNanos.get();
+		if ((lastLog == 0L || now - lastLog >= ASYNC_REJECTION_LOG_INTERVAL_NANOS)
+				&& lastAsyncRejectionLogNanos.compareAndSet(lastLog, now)) {
+			final int rejectedSinceLastLog = rejectedAsyncTaskCount.getAndSet(0);
+			if (task != null && task.getOwner() != null) {
+				try {
+					task.getOwner().getLogger().warning("WindSpigot async scheduler is saturated; rejected "
+							+ rejectedSinceLastLog + " task(s) (latest task #" + task.getTaskId() + ").");
+				} catch (RuntimeException ignored) {
+					// A logger failure must never escape the rejection handler and interrupt a server tick.
+				}
+			}
+		}
 	}
 
 	private void addTask(final CraftTask task) {

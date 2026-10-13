@@ -37,7 +37,7 @@ public class PacketPlayInChat implements Packet<PacketListenerPlayIn> {
 
 	// Spigot Start
 	private static final java.util.concurrent.ExecutorService executors = java.util.concurrent.Executors
-			.newCachedThreadPool(new com.google.common.util.concurrent.ThreadFactoryBuilder().setDaemon(true)
+			.newFixedThreadPool(Math.max(2, Math.min(Runtime.getRuntime().availableProcessors(), 8)), new com.google.common.util.concurrent.ThreadFactoryBuilder().setDaemon(true)
 					.setNameFormat("Async Chat Thread - #%d").build());
 
 	@Override

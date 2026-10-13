@@ -110,6 +110,7 @@ import com.avaje.ebean.config.DataSourceConfig;
 import com.avaje.ebean.config.ServerConfig;
 import com.avaje.ebean.config.dbplatform.SQLitePlatform;
 import com.avaje.ebeaninternal.server.lib.sql.TransactionIsolation;
+import com.windpvp.windspigot.database.SQLiteDatabaseConfig;
 import com.eatthepath.uuid.FastUUID;
 import com.google.common.base.Charsets;
 import com.google.common.collect.ImmutableList;
@@ -1289,6 +1290,7 @@ public final class CraftServer implements Server {
 		if (ds.getDriver().contains("sqlite")) {
 			config.setDatabasePlatform(new SQLitePlatform());
 			config.getDatabasePlatform().getDbDdlSyntax().setIdentity("");
+			SQLiteDatabaseConfig.apply(ds);
 		}
 
 		config.setDataSourceConfig(ds);
