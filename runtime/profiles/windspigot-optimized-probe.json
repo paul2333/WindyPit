@@ -1,0 +1,53 @@
+{
+  "play": {
+    "client_settings_sent": true,
+    "entity_id": 2369,
+    "inventory_action_number": 1,
+    "inventory_click_accepted": true,
+    "inventory_click_acknowledged": true,
+    "inventory_click_confirmation": "accepted-confirmation",
+    "inventory_click_sent": true,
+    "inventory_window_id": 0,
+    "joined": true,
+    "login_success": true,
+    "login_uuid": "60853c2f-f985-36f6-a3ee-7700607a792e",
+    "movement_sent": true,
+    "position": [
+      -197.5,
+      69.0,
+      182.5
+    ],
+    "server_packet_ids_seen": [
+      "0x01",
+      "0x02",
+      "0x03",
+      "0x05",
+      "0x06",
+      "0x08",
+      "0x09",
+      "0x1f",
+      "0x2f",
+      "0x30",
+      "0x32",
+      "0x37",
+      "0x38",
+      "0x39",
+      "0x3f",
+      "0x41",
+      "0x44"
+    ],
+    "window_items_received": true
+  },
+  "protocol": 47,
+  "status": {
+    "description": "A Minecraft Server",
+    "players": {
+      "max": 2,
+      "online": 0
+    },
+    "version": {
+      "name": "WindSpigot 1.8.8",
+      "protocol": 47
+    }
+  }
+}

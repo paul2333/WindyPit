@@ -1,0 +1,22 @@
+# Trial the newest pair on the pinned Folia build; retain only if the isolated smoke passes.
+- name: "ViaVersion"
+  version: "5.12.1"
+  filename: "ViaVersion-5.12.1.jar"
+  url: "https://api.github.com/repos/ViaVersion/ViaVersion/releases/assets/621954929"
+  sha256: "b8033807e7182c35003a45962352dd642c1e91880ca281da3a43cb6f481a95a2"
+  required: true
+  depends_on: []
+- name: "ViaBackwards"
+  version: "5.12.1"
+  filename: "ViaBackwards-5.12.1.jar"
+  url: "https://api.github.com/repos/ViaVersion/ViaBackwards/releases/assets/621956951"
+  sha256: "29d94d3a26c85c8a327574b2322db4078992ae457f0173325431a12aac384911"
+  required: true
+  depends_on: ["ViaVersion"]
+- name: "ViaRewind"
+  version: "4.2.0"
+  filename: "ViaRewind-4.2.0.jar"
+  url: "https://api.github.com/repos/ViaVersion/ViaRewind/releases/assets/572865570"
+  sha256: "d6634ba57bb82d5161c68dfb393571cdf40511a0beb1b04b8c7ed794a3532c6a"
+  required: true
+  depends_on: ["ViaVersion", "ViaBackwards"]

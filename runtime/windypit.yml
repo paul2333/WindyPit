@@ -1,0 +1,10 @@
+# Deployment-owned launcher settings only. Folia generates and owns server configs.
+java.home: ""
+server.jar: "server/folia-26.1.2-8.jar"
+plugins.directory: "plugins"
+heap.min: "2G"
+heap.max: "4G"
+gc: "g1"
+server.args: []
+eula.path: "test-data/smoke/eula.txt"
+test.data.path: "test-data"

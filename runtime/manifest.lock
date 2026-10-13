@@ -1,0 +1,10 @@
+# Production runtime pin. Folia 26.2.7 is beta and is not this production pin.
+minecraft: "26.1.2"
+server: "Folia"
+build: 8
+channel: "STABLE"
+java_min: 25
+filename: "folia-26.1.2-8.jar"
+url: "https://fill-data.papermc.io/v1/objects/607afd1c3320008e1ffd2eaee6780ace4419d5f8c527b75e79f259be79ebf57b/folia-26.1.2-8.jar"
+sha256: "607afd1c3320008e1ffd2eaee6780ace4419d5f8c527b75e79f259be79ebf57b"
+notes: "Folia 26.2.7 is beta; use stable 26.1.2 build 8 for this production pin."
