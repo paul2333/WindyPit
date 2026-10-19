@@ -37,7 +37,23 @@ public final class BoundedThreadPoolExecutor extends ThreadPoolExecutor {
                 Objects.requireNonNull(threadFactory, "threadFactory"), rejectOnSaturation(saturationEvents, rejectedTasks));
         this.saturationEvents = saturationEvents;
         this.rejectedTasks = rejectedTasks;
+        // Workers register themselves in beforeExecute: a worker that never picked up a task
+        // can never call back into this pool, so the isOnWorker guard is complete without a
+        // wrapping ThreadFactory (which cannot be built before the super constructor runs).
         prestartAllCoreThreads();
+    }
+
+    /**
+     * Records each worker the first time it runs a task.
+     *
+     * <p>This backs {@link #isOnWorker(Thread)}: a worker that submits work back to its own
+     * pool and waits on the result starves the pool, so the caller must detect that and run
+     * inline instead. A worker that has never executed a task cannot make that call, so
+     * first-task registration is sufficient.
+     */
+    @Override
+    protected void beforeExecute(Thread worker, Runnable task) {
+        recordWorker(worker);
     }
 
     private static int requirePositive(int value, String name) {
@@ -68,6 +84,27 @@ public final class BoundedThreadPoolExecutor extends ThreadPoolExecutor {
                 getQueue().size() + getQueue().remainingCapacity(),
                 getCompletedTaskCount(), acceptedTasks.get(),
                 saturationEvents.get(), rejectedTasks.get(), isShutdown());
+    }
+
+    /**
+     * True when the given thread is one of this pool's workers.
+     *
+     * <p>Used to refuse fan-out patterns where a worker would submit work back to its own pool
+     * and wait on the result: that is a guaranteed starvation deadlock. Workers are created by
+     * this pool's {@link java.util.concurrent.ThreadFactory}, so the thread it created is
+     * recorded directly.
+     */
+    public boolean isOnWorker(Thread thread) {
+        return thread != null && workerThreads.contains(thread);
+    }
+
+    private final java.util.Set<Thread> workerThreads = java.util.Collections.newSetFromMap(
+            new java.util.concurrent.ConcurrentHashMap<Thread, Boolean>());
+
+    private void recordWorker(Thread worker) {
+        if (worker != null) {
+            workerThreads.add(worker);
+        }
     }
 
     /**

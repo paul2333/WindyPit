@@ -470,15 +470,18 @@ public class WindSpigotConfig {
 	
 	private static void asyncExplosions() {
 		boolean requested = getBoolean("settings.async.explosions.enable", false);
-		// WindyPit - still unsafe: explosion density ray-traces live world state and publishes
-		// into a shared cache without re-validating its inputs. Keep it on the primary thread
-		// until it reads a snapshot the way the path searcher does.
-		asyncTnt = AsyncExecutionPolicy.isEnabled(requested, false);
-		if (requested) {
-			LOGGER.warn("Async explosion density is disabled because it ray-traces and caches live world state.");
-		}
 		fixedPoolSize = getBoundedInt("settings.async.explosions.threads", 3, 1, 32);
 		explosionQueueCapacity = getBoundedInt("settings.async.explosions.queue-capacity", 128, 1, 4096);
+		// WindyPit - explosion density is now safe off-thread: the rays run on the explosion
+		// workers while the primary thread blocks, and the per-chunk block generations are
+		// re-checked before a computed density may enter the cache. A moved block discards
+		// the whole batch and the primary thread recomputes it.
+		asyncTnt = AsyncExecutionPolicy.isEnabled(requested, true);
+		if (asyncTnt) {
+			// Logged after the thread count is known so the line reports the real pool size.
+			LOGGER.info("Async explosion density enabled (" + fixedPoolSize
+					+ " threads); results are discarded when the traced chunks change mid-trace.");
+		}
 	}
 	
 	public static double maxReachSqrd;

@@ -1,5 +1,6 @@
 package net.minecraft.server;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedList;
@@ -16,6 +17,8 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.windpvp.windspigot.cache.Constants;
 import com.windpvp.windspigot.config.WindSpigotConfig;
+
+import xyz.sculas.nacho.async.AsyncExplosions;
 
 public class Explosion {
 
@@ -103,37 +106,140 @@ public class Explosion {
 
 	public void affectEntities(List<Entity> list, Vec3D vec3d, float f3) {
 		double maxDistSq = (double) (f3 * f3); // WindSpigot - fix fireball & explosion knockback direction and radius scaling
+
+		// WindyPit start - parallel explosion density
+		// Collect the entities that need a density first, then compute every missing cache
+		// entry on the explosion workers in one fan-out. The server thread blocks while the
+		// rays run, so it performs no block writes of its own; the generation check below
+		// discards the batch when anything else moved. Misses fall back to the sync trace.
+		final List<Entity> targets = new ArrayList<Entity>(list.size());
 		for (Entity entity : list) {
-			if (!entity.aW()) {
-				if (!entity.dead) {
-					double d8 = entity.locX - this.posX;
-					double d9 = entity.locY + entity.getHeadHeight() - this.posY;
-					double d10 = entity.locZ - this.posZ;
-					double distanceSquared = d8 * d8 + d9 * d9 + d10 * d10;
-
-					if (distanceSquared <= maxDistSq && distanceSquared != 0.0D) {
-						double d11 = MathHelper.sqrt(distanceSquared);
-						double d7 = d11 / f3;
-						// WindSpigot - d7 <= 1.0D is guaranteed here since distanceSquared <= f3*f3
-						d8 /= d11;
-						d9 /= d11;
-						d10 /= d11;
-
-						// Paper - Optimize explosions
-						// double d12 = this.getBlockDensity(vec3d, entity);
-						double finalD = d8;
-						double finalD1 = d9;
-						double finalD11 = d10;
-
-						// Density calculation reads live World/Chunk/Block state and must stay
-						// on the owner thread until an immutable snapshot implementation exists.
-						processEntityKnockback(entity, d7, finalD, finalD1, finalD11, f3,
-								this.getBlockDensitySync(vec3d, entity.getBoundingBox()));
-					}
+			if (!entity.aW() && !entity.dead) {
+				double d8 = entity.locX - this.posX;
+				double d9 = entity.locY + entity.getHeadHeight() - this.posY;
+				double d10 = entity.locZ - this.posZ;
+				double distanceSquared = d8 * d8 + d9 * d9 + d10 * d10;
+				if (distanceSquared <= maxDistSq && distanceSquared != 0.0D) {
+					targets.add(entity);
 				}
 			}
 		}
+		warmDensityCache(vec3d, targets);
+		// WindyPit end
+
+		for (Entity entity : targets) {
+			double d8 = entity.locX - this.posX;
+			double d9 = entity.locY + entity.getHeadHeight() - this.posY;
+			double d10 = entity.locZ - this.posZ;
+			double distanceSquared = d8 * d8 + d9 * d9 + d10 * d10;
+
+			if (distanceSquared <= maxDistSq && distanceSquared != 0.0D) {
+				double d11 = MathHelper.sqrt(distanceSquared);
+				double d7 = d11 / f3;
+				// WindSpigot - d7 <= 1.0D is guaranteed here since distanceSquared <= f3*f3
+				d8 /= d11;
+				d9 /= d11;
+				d10 /= d11;
+
+				// Paper - Optimize explosions
+				// double d12 = this.getBlockDensity(vec3d, entity);
+				double finalD = d8;
+				double finalD1 = d9;
+				double finalD11 = d10;
+
+				processEntityKnockback(entity, d7, finalD, finalD1, finalD11, f3,
+						this.getBlockDensitySync(vec3d, entity.getBoundingBox()));
+			}
+		}
 	}
+
+	// WindyPit start - parallel explosion density
+	/**
+	 * Computes the missing density entries for one explosion on the worker pool.
+	 *
+	 * <p>The density rays are a pure block read, and while the server thread waits on the
+	 * futures it writes no blocks itself, so the only remaining hazard is a concurrent writer.
+	 * Each affected chunk's block-change generation is captured before the fan-out and
+	 * re-checked after: a mismatch discards the whole batch and leaves the cache untouched, so
+	 * {@link #getBlockDensitySync} recomputes those entries on the primary thread.
+	 */
+	private void warmDensityCache(Vec3D vec3d, List<Entity> targets) {
+		if (targets.isEmpty() || !AsyncExplosions.canFanOut()) {
+			return;
+		}
+		// One job per entity whose cache entry is missing.
+		final List<AxisAlignedBB> missing = new ArrayList<AxisAlignedBB>(targets.size());
+		final List<Integer> missingKeys = new ArrayList<Integer>(targets.size());
+		for (Entity entity : targets) {
+			AxisAlignedBB aabb = entity.getBoundingBox();
+			int key = createKey(this, aabb);
+			if (this.world.explosionDensityCache.get(key) == -1.0f) {
+				missing.add(aabb);
+				missingKeys.add(key);
+			}
+		}
+		if (missing.isEmpty()) {
+			return;
+		}
+
+		// Snapshot the generations of every chunk the rays can touch. The rays span from the
+		// explosion to each entity's bounding box, so the covered area is the union bounding
+		// box padded by one block.
+		final int minX = MathHelper.floor(Math.min(this.posX, minA(missing, 0))) - 1;
+		final int maxX = MathHelper.floor(Math.max(this.posX, maxA(missing, 3))) + 1;
+		final int minZ = MathHelper.floor(Math.min(this.posZ, minA(missing, 2))) - 1;
+		final int maxZ = MathHelper.floor(Math.max(this.posZ, maxA(missing, 5))) + 1;
+		final ChunkCache generationCache = new ChunkCache(this.world, minX, 0, minZ, maxX, 255, maxZ, 0);
+		final int[] generations = generationCache.captureGeneration();
+
+		final List<java.util.concurrent.Callable<Float>> jobs =
+				new ArrayList<java.util.concurrent.Callable<Float>>(missing.size());
+		for (int i = 0; i < missing.size(); i++) {
+			final AxisAlignedBB aabb = missing.get(i);
+			jobs.add(() -> calculateDensity(vec3d, aabb));
+		}
+
+		List<Float> results = AsyncExplosions.awaitAll(jobs, AsyncExplosions.awaitTimeoutMillis());
+		if (results == null) {
+			// Rejected, failed or timed out: the sync path below recomputes each entry.
+			return;
+		}
+		if (!generationCache.matchesGeneration(generations)) {
+			// Blocks moved under the rays: a stale density must never reach the cache.
+			return;
+		}
+		for (int i = 0; i < results.size(); i++) {
+			this.world.explosionDensityCache.put(missingKeys.get(i), results.get(i));
+		}
+	}
+
+	private static double minA(List<AxisAlignedBB> boxes, int field) {
+		double value = Double.MAX_VALUE;
+		for (AxisAlignedBB box : boxes) {
+			value = Math.min(value, field(box, field));
+		}
+		return value;
+	}
+
+	private static double maxA(List<AxisAlignedBB> boxes, int field) {
+		double value = -Double.MAX_VALUE;
+		for (AxisAlignedBB box : boxes) {
+			value = Math.max(value, field(box, field));
+		}
+		return value;
+	}
+
+	private static double field(AxisAlignedBB box, int index) {
+		switch (index) {
+			case 0: return box.a;
+			case 1: return box.b;
+			case 2: return box.c;
+			case 3: return box.d;
+			case 4: return box.e;
+			default: return box.f;
+		}
+	}
+	// WindyPit end
 
 	private void processEntityKnockback(Entity entity, double d7, double finalD, double finalD1, double finalD11, float f3, double d12) {
 		double d13 = (1.0D - d7) * d12;
