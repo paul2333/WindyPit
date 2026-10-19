@@ -1,8 +1,11 @@
 # WindyPit 服务端审计报告
 
-审计对象：`C:\Users\ylxyl\OneDrive\Desktop\WindyPit`（HEAD `357c934`）
+审计对象：`C:\Users\ylxyl\OneDrive\Desktop\WindyPit`（审计时 HEAD `357c934`，修复提交 `d4d3a9a`）
 审计日期：2026-10-19
 审计方式：静态代码证据 + 运行期实测（恢复后 jar 实机启动、`/windypit-tps` 输出）
+
+> **修复状态**：第 1.1 节的"12 个空转线程"已在 `d4d3a9a` 修复并实测验证（JVM 线程 33 → 20）。
+> 其余结论（多线程实际并行范围、698 行零引用代码、5 个死配置键）仍然有效。
 
 ---
 
@@ -42,7 +45,7 @@ int computeThreads = config.threading().resolveThreads(..., Math.max(1, Runtime.
 this.computePool = new ComputePool(computeThreads, 1024, regionScheduler, ...);
 ```
 
-**实测证据**（24 核机器）：
+**修复前实测证据**（24 核机器）：
 
 ```
 Multithreading:
@@ -54,6 +57,19 @@ Multithreading:
 ```
 
 12 个 `WindyPit-Compute-*` 线程**已创建但 CPU 占用 0%**，属于纯资源占用。
+
+**修复后实测证据**（提交 `d4d3a9a`，同样 COMPAT、同样 24 核）：
+
+```
+Multithreading:
+  Mode: COMPAT | Effective: NOT ACTIVE (COMPAT: all work on the primary thread)
+  CPUs: 24 | JVM threads: 20 | total: 0.99 cores (4%)
+  Per-group CPU (1s window):
+    Primary (Server thread)   0.0% | 0.00 cores | 1 threads
+```
+
+`Compute pool` 分组消失，JVM 线程数 33 → 20。修复方式：`ComputePool` 的 worker 线程改为
+`submit()` 首次调用时才创建（`ComputePool.java` `startWorkersIfNeeded()`），未使用的池不持有任何线程。
 
 ### 1.2 REGION 模式
 
