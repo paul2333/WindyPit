@@ -92,6 +92,50 @@ public class ChunkCache implements IBlockAccess {
 		return this.getType(var1).getBlock().getMaterial() == Material.AIR;
 	}
 
+	// WindyPit start - stable-read support for async path searches
+	/**
+	 * Captures the block-change generation of every chunk this cache can read.
+	 *
+	 * <p>Called on the primary thread immediately before the cache is handed to a worker. The
+	 * worker re-reads the same generations through {@link #matchesGeneration(int[])} after the
+	 * search: an unchanged sum means no block in the searched area moved while the search ran, so
+	 * the resulting path is still valid. A mismatch discards the path instead of publishing a
+	 * stale one.
+	 */
+	public int[] captureGeneration() {
+		final int[] generations = new int[this.c.length * (this.c.length == 0 ? 0 : this.c[0].length)];
+		int index = 0;
+		for (int x = 0; x < this.c.length; x++) {
+			for (int z = 0; z < this.c[x].length; z++) {
+				final Chunk chunk = this.c[x][z];
+				generations[index++] = chunk == null ? 0 : chunk.getBlockChangeGeneration();
+			}
+		}
+		return generations;
+	}
+
+	/** Re-reads the same chunks; true when no block changed since {@link #captureGeneration()}. */
+	public boolean matchesGeneration(int[] generations) {
+		if (generations == null) {
+			return false;
+		}
+		int index = 0;
+		for (int x = 0; x < this.c.length; x++) {
+			for (int z = 0; z < this.c[x].length; z++) {
+				if (index >= generations.length) {
+					return false;
+				}
+				final Chunk chunk = this.c[x][z];
+				final int current = chunk == null ? 0 : chunk.getBlockChangeGeneration();
+				if (current != generations[index++]) {
+					return false;
+				}
+			}
+		}
+		return index == generations.length;
+	}
+	// WindyPit end
+
 	public int getBlockPower(BlockPosition var1, EnumDirection var2) {
 		IBlockData var3 = this.getType(var1);
 		return var3.getBlock().b(this, var1, var3, var2);

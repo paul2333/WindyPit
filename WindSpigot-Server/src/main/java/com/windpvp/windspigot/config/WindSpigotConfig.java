@@ -390,10 +390,9 @@ public class WindSpigotConfig {
 	@SuppressWarnings("unchecked")
 	private static void asyncPathSearches() {
 		boolean requested = getBoolean("settings.async.path-searches.enabled", false);
-		asyncPathSearches = AsyncExecutionPolicy.isEnabled(requested, false);
-		if (requested) {
-			LOGGER.warn("Async path searches are disabled because ChunkCache and entity state are live mutable world data.");
-		}
+		// WindyPit - path searching is safe off-thread: SearchHandler re-reads the chunk block
+		// generations after computing and discards any path whose world moved underneath it.
+		asyncPathSearches = AsyncExecutionPolicy.isEnabled(requested, true);
 		
 		if (asyncPathSearches) {
 			List<String> asyncSearchEntities = getList("settings.async.path-searches.entities",
@@ -415,7 +414,11 @@ public class WindSpigotConfig {
 			pathSearchThreads = getBoundedInt("settings.async.path-searches.threads", 4, 1, 32);
 			pathSearchQueueCapacity = getBoundedInt("settings.async.path-searches.queue-capacity", 128, 1, 4096);
 			ensurePathSearchAccuracy = getBoolean("settings.async.path-searches.ensure-accuracy", true);
-			
+
+			// Logged after the thread count is known so the line reports the real pool size.
+			LOGGER.info("Async path searches enabled (" + pathSearchThreads
+					+ " threads, " + finalEntities.size() + " entity types); results are discarded"
+					+ " when the searched chunks change mid-search.");
 		} 
 	}
 	
@@ -467,6 +470,9 @@ public class WindSpigotConfig {
 	
 	private static void asyncExplosions() {
 		boolean requested = getBoolean("settings.async.explosions.enable", false);
+		// WindyPit - still unsafe: explosion density ray-traces live world state and publishes
+		// into a shared cache without re-validating its inputs. Keep it on the primary thread
+		// until it reads a snapshot the way the path searcher does.
 		asyncTnt = AsyncExecutionPolicy.isEnabled(requested, false);
 		if (requested) {
 			LOGGER.warn("Async explosion density is disabled because it ray-traces and caches live world state.");

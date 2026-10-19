@@ -22,6 +22,14 @@ public class Chunk {
 
 	private static final Logger c = LogManager.getLogger();
 	private final ChunkSection[] sections;
+	// WindyPit start - block-change generation for safe async reads
+	// Incremented on the primary thread by every block write. An async path search reads the
+	// live ChunkSection arrays, then re-reads this counter before publishing its result; a
+	// mismatch means the world changed underneath it, so the result is discarded and the search
+	// falls back to the synchronous path. Volatile write is a plain store on x86, so the cost in
+	// the hot setType path is a single memory fence.
+	private volatile int blockChangeGeneration;
+	// WindyPit end
 	private final byte[] e;
 	private final int[] f;
 	private final boolean[] g;
@@ -222,6 +230,13 @@ public class Chunk {
 	public ChunkSection[] getSections() {
 		return this.sections;
 	}
+
+	// WindyPit start - block-change generation for safe async reads
+	/** Monotonic per-chunk counter, bumped by every block write on the primary thread. */
+	public int getBlockChangeGeneration() {
+		return this.blockChangeGeneration;
+	}
+	// WindyPit end
 
 	public void initLighting() {
 		int i = this.g();
@@ -636,6 +651,9 @@ public class Chunk {
 			}
 
 			chunksection.setType(i, j & 15, k, iblockdata);
+			// WindyPit start - publish the block change to async readers
+			this.blockChangeGeneration++;
+			// WindyPit end
 			if (block1 != block) {
 				if (!this.world.isClientSide) {
 					block1.remove(this.world, blockposition, iblockdata1);

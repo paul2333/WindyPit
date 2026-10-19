@@ -18,7 +18,7 @@ public class SearchHandler {
 	private final BoundedThreadPoolExecutor executor;
 
 	public SearchHandler() {
-		if (AsyncExecutionPolicy.isEnabled(WindSpigotConfig.asyncPathSearches, false)) {
+		if (AsyncExecutionPolicy.isEnabled(WindSpigotConfig.asyncPathSearches, true)) {
 			executor = new BoundedThreadPoolExecutor(
 					WindSpigotConfig.pathSearchThreads, WindSpigotConfig.pathSearchQueueCapacity,
 					new ThreadFactoryBuilder().setNameFormat("WindSpigot Entity Path Search Thread %d").setDaemon(true).build());
@@ -29,7 +29,7 @@ public class SearchHandler {
 	}
 
 	public void issueSearch(Entity targetEntity, AsyncNavigation navigation) {
-		if (!AsyncExecutionPolicy.isEnabled(WindSpigotConfig.asyncPathSearches, false)) {
+		if (!AsyncExecutionPolicy.isEnabled(WindSpigotConfig.asyncPathSearches, true)) {
 			return;
 		}
 		
@@ -44,11 +44,19 @@ public class SearchHandler {
 		final int finalX = MathHelper.floor(targetEntity.locX);
 		final int finalY = MathHelper.floor(targetEntity.locY) + 1;
 		final int finalZ = MathHelper.floor(targetEntity.locZ);
+		// WindyPit start - capture the block generations on the primary thread
+		final int[] generation = chunkCache.captureGeneration();
+		// WindyPit end
 		
 		Runnable task = () -> {
 			
 			try {
 				PathEntity path = navigation.doPathSearch(chunkCache, finalX, finalY, finalZ);
+				// WindyPit start - discard results computed against a world that moved
+				if (!chunkCache.matchesGeneration(generation)) {
+					return;
+				}
+				// WindyPit end
 				SearchCacheEntryEntity cache = new SearchCacheEntryEntity(targetEntity, navigation.getEntity(), path);
 				navigation.addEntry(cache);
 			} finally {
@@ -66,7 +74,7 @@ public class SearchHandler {
 	}
 
 	public void issueSearch(int x, int y, int z, AsyncNavigation navigation) {
-		if (!AsyncExecutionPolicy.isEnabled(WindSpigotConfig.asyncPathSearches, false)) {
+		if (!AsyncExecutionPolicy.isEnabled(WindSpigotConfig.asyncPathSearches, true)) {
 			return;
 		}
 
@@ -78,10 +86,19 @@ public class SearchHandler {
 		
 		navigation.isSearching.set(true);
 		
+		// WindyPit start - capture the block generations on the primary thread
+		final int[] generation = chunkCache.captureGeneration();
+		// WindyPit end
+
 		Runnable task = () -> {
 			
 			try {
 				PathEntity path = navigation.doPathSearch(chunkCache, x, y, z);
+				// WindyPit start - discard results computed against a world that moved
+				if (!chunkCache.matchesGeneration(generation)) {
+					return;
+				}
+				// WindyPit end
 				SearchCacheEntryPosition cache = new SearchCacheEntryPosition(x, y, z, navigation.getEntity(), path);
 				navigation.addEntry(cache);
 			} finally {
