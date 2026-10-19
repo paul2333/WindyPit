@@ -38,6 +38,10 @@ public class BlockRedstoneWire extends Block {
 
 	@Override
 	public IBlockData updateState(IBlockData iblockdata, IBlockAccess iblockaccess, BlockPosition blockposition) {
+		// WindyPit - mechanism pruning: no redstone network recomputation while disabled.
+		if (iblockaccess instanceof World && ((World) iblockaccess).pruningPlan().disableRedstoneAndHoppers()) {
+			return iblockdata;
+		}
 		iblockdata = iblockdata.set(BlockRedstoneWire.WEST, this.c(iblockaccess, blockposition, EnumDirection.WEST));
 		iblockdata = iblockdata.set(BlockRedstoneWire.EAST, this.c(iblockaccess, blockposition, EnumDirection.EAST));
 		iblockdata = iblockdata.set(BlockRedstoneWire.NORTH, this.c(iblockaccess, blockposition, EnumDirection.NORTH));
@@ -305,6 +309,10 @@ public class BlockRedstoneWire extends Block {
 
 	@Override
 	public void doPhysics(World world, BlockPosition blockposition, IBlockData iblockdata, Block block) {
+		// WindyPit - mechanism pruning: neighbor updates do not propagate through redstone wire.
+		if (world.pruningPlan().disableRedstoneAndHoppers()) {
+			return;
+		}
 		if (!world.isClientSide) {
 			if (this.canPlace(world, blockposition)) {
 				this.e(world, blockposition, iblockdata);

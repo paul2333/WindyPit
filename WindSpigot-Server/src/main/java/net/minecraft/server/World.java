@@ -43,6 +43,21 @@ public abstract class World implements IBlockAccess {
 	private int a = 63;
 	protected boolean e;
 	// Spigot start - guard entity list from removals
+	// WindyPit - per-world mechanism pruning plan (W5-PRUNING). Defaults to all-disabled so any
+	// World created outside WorldServer keeps vanilla behaviour.
+	protected volatile com.windpvp.windspigot.config.MechanismPruningPlan pruningPlan =
+			com.windpvp.windspigot.config.MechanismPruningPlan.builder().build();
+
+	public com.windpvp.windspigot.config.MechanismPruningPlan pruningPlan() {
+		return pruningPlan;
+	}
+
+	public void setPruningPlan(com.windpvp.windspigot.config.MechanismPruningPlan pruningPlan) {
+		if (pruningPlan != null) {
+			this.pruningPlan = pruningPlan;
+		}
+	}
+
 	public final List<Entity> entityList = new ObjectArrayList<Entity>() { // WindSpigot - ArrayList -> ObjectArrayList 
 		@Override
 		public Entity remove(int index) {
@@ -2511,6 +2526,11 @@ public abstract class World implements IBlockAccess {
 	}
 
 	protected void p() {
+		// WindyPit - mechanism pruning: skip the whole weather/thunder simulation. No rain,
+		// thunder, lightning or per-player weather packets are produced while disabled.
+		if (this.pruningPlan.disableWeatherAndDaylight()) {
+			return;
+		}
 		if (!this.worldProvider.o()) {
 			if (!this.isClientSide) {
 				int i = this.worldData.A();

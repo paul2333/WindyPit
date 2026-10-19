@@ -1,0 +1,3 @@
+id,repo,owner,files,dependencies,status,commit,commands,exit_code,test_counts,evidence,blocker,next_action,updated_at
+W0-RECON,both,subagent-05-recon,"all dirty+untracked paths; see dirty-manifest.csv",none,IN_PROGRESS,,"git manifests; TradeRequest restore; PlayerActivityReadinessTest 10x targeted + 3x full suite; mvn install; gradle build; clean worktree builds",,pending,".review/*/audit/*",none,"in execution; orchestrator verifies evidence then marks DONE_VERIFIED",2026-10-17T15:00:00+08:00
+

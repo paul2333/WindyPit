@@ -1,0 +1,14 @@
+
+  # Mechanism pruning (drop unnecessary ticks in PvP-only regions)
+  mechanism-pruning: true
+
+rollback:
+  # Force arena to run on primary thread (emergency rollback)
+  force-primary-thread-arena: false
+
+  # Disable async tracking (rollback to sync-only)
+  disable-async-tracking: false
+
+  # Disable region scheduler (rollback to compat mode)
+  disable-region-scheduler: false
+

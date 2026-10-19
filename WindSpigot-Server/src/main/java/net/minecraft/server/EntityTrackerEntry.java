@@ -190,6 +190,20 @@ public class EntityTrackerEntry {
 		this.track(null);
 	}
 
+	// WindyPit start - plan-driven visibility (W1-REGION-REAL)
+	/**
+	 * Movement/velocity-only tracker step used when the world owner produced a visibility plan.
+	 * Add/remove decisions are applied from that immutable plan on the primary thread, so this
+	 * method must NOT run the O(nearby players) visibility scan again. FIFO and packet order are
+	 * unchanged: {@link #track(List)} is still called exactly once per tick.
+	 */
+	public void updateMovementOnly(int trackerThread) {
+		this.trackerThread = trackerThread;
+		this.withinNoTrack = this.withinNoTrack();
+		this.track(null);
+	}
+	// WindyPit end
+
 	private void removeFarPlayers() {
 		if (this.withinNoTrack) {
 			toRemove.addAll(this.trackedPlayers);

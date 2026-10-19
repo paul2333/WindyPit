@@ -40,4 +40,26 @@ public class ChunkIOExecutor {
 	public static void tick() {
 		instance.finishActive();
 	}
+
+	/**
+	 * Shutdown drain: stops accepting chunk loads, waits for already submitted loads and terminates
+	 * the chunk IO pool.
+	 *
+	 * @return true when the pool terminated within {@code timeoutMs}
+	 */
+	public static boolean close(long timeoutMs) {
+		return instance.close(timeoutMs);
+	}
+
+	public static boolean isClosed() {
+		return instance.isClosed();
+	}
+
+	public static boolean shutdownTimedOut() {
+		return instance.isShutdownTimedOut();
+	}
+
+	public static int pendingTaskCount() {
+		return instance.pendingTaskCount();
+	}
 }

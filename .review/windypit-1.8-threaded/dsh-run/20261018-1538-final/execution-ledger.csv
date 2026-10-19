@@ -1,0 +1,10 @@
+timestamp,repo,command,exit_code,artifact
+2026-10-18T15:42:32.6430372+08:00,WindyPit,mvn-jdk25.bat -o -B -pl WindSpigot-Server test,0
+2026-10-18T15:43:19.4422782+08:00,WindyPit,mvn-jdk25.bat -o -B install,0
+2026-10-18T16:03:03.2173726+08:00,WindyPit,mvn-jdk25.bat -o -B -pl WindSpigot-Server test,0,phase0-baseline-mvn-test.log
+2026-10-18T16:03:03.2349192+08:00,WindyPit,mvn-jdk25.bat -o -B install,0,phase0-baseline-mvn-install.log
+2026-10-18T17:17:36.9505456+08:00,WindyPit,mvn-jdk25.bat -o -B -pl WindSpigot-Server test (config single-owner),1,p3-config-tests.log
+2026-10-18T17:57:18.6822777+08:00,WindyPit,mvn-jdk25.bat -o -B install (final, config single-owner),0,p3-final-install.log
+2026-10-18T19:24:46.8428652+08:00,WindyPit,mvn-jdk25.bat -o -B install (final 207 tests, jar BE593B0F...),0,p3-final-install.log
+2026-10-18T19:24:46.8545212+08:00,WindyPit,P65b-run-smoke.ps1 (final jars, REGION, ThePit enabled, clean stop),0,P65b-smoke-result.txt
+

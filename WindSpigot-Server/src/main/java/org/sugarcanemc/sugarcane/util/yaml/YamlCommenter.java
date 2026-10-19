@@ -48,14 +48,17 @@ public class YamlCommenter {
 			int line = YamlUtils.findKey(lines, _comment.getKey());
 			
             if(line == -1) {
-                throw new IllegalStateException(String.format(
-                        "You are trying to add a comment to key \"%s\" which does not exist!",
-                        _comment.getKey()
-                ));
+                // Optional/conditional keys (for example async path-search tuning that is only
+                // written when the feature is enabled) may legitimately be absent. A missing
+                // comment target must never abort saving the whole configuration file.
+                java.util.logging.Logger.getLogger("WindSpigotConfig").warning(
+                        "Skipping comment for missing key \"" + _comment.getKey() + "\" in " + file.getName());
+                continue;
             }
-            
+
 			String prefix = Utils.repeat(" ", getIndentation(lines.get(line))) + "# ";
-			boolean noNewline = getIndentation(lines.get(line)) > getIndentation(lines.get(line - 1));
+			boolean noNewline = line > 0
+					&& getIndentation(lines.get(line)) > getIndentation(lines.get(line - 1));
 			if (line >= 0) {
 				lines.add(line, (noNewline ? "" : "\n") + prefix + _comment.getValue().replace("\n", "\n" + prefix));
 			} else {

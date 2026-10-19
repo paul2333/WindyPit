@@ -66,10 +66,26 @@ public class WorldServer extends World /*implements IAsyncTaskHandler*/ { // Pan
 	// WindSpigot
 	public WorldTicker ticker;
 
-	// Add env and gen to constructor
+	// WindyPit - per-world mechanism pruning plan (Prompt W1-E)
+	private final com.windpvp.windspigot.config.MechanismPruningPlan pruningPlan;
+
+	public com.windpvp.windspigot.config.MechanismPruningPlan pruningPlan() {
+		return this.pruningPlan;
+	}
+
 	public WorldServer(MinecraftServer minecraftserver, IDataManager idatamanager, WorldData worlddata, int i,
-			MethodProfiler methodprofiler, org.bukkit.World.Environment env, org.bukkit.generator.ChunkGenerator gen) {
+			MethodProfiler methodprofiler, org.bukkit.World.Environment env, org.bukkit.generator.ChunkGenerator gen,
+			com.windpvp.windspigot.config.MechanismPruningPlan pruningPlan) {
 		super(idatamanager, worlddata, WorldProvider.byDimension(env.getId()), methodprofiler, false, gen, env);
+		this.pruningPlan = pruningPlan != null ? pruningPlan
+				: com.windpvp.windspigot.config.MechanismPruningPlan.builder().build();
+		this.setPruningPlan(this.pruningPlan);
+		if (this.pruningPlan.disableWeatherAndDaylight()) {
+			worlddata.setStorm(false);
+			worlddata.setThundering(false);
+			worlddata.setWeatherDuration(0);
+			worlddata.setThunderDuration(0);
+		}
 		this.dimension = i;
 		this.pvpMode = minecraftserver.getPVP();
 		worlddata.world = this;
@@ -238,7 +254,8 @@ public class WorldServer extends World /*implements IAsyncTaskHandler*/ { // Pan
 		}
 
 		this.worldProvider.m().b();
-		if (this.everyoneDeeplySleeping()) {
+		final boolean pruningWeather = this.pruningPlan.disableWeatherAndDaylight();
+		if (!pruningWeather && this.everyoneDeeplySleeping()) {
 			if (this.getGameRules().getBoolean("doDaylightCycle")) {
 				long i = this.worldData.getDayTime() + 24000L;
 
@@ -251,7 +268,9 @@ public class WorldServer extends World /*implements IAsyncTaskHandler*/ { // Pan
 		// CraftBukkit start - Only call spawner if we have players online and the world
 		// allows for mobs or animals
 		long time = this.worldData.getTime();
-		if (this.getGameRules().getBoolean("doMobSpawning")
+		final boolean pruningNaturalSpawning = this.pruningPlan.disableNaturalSpawning();
+		final boolean pruningHostileSpawning = this.pruningPlan.disableHostileMobSpawning();
+		if (!pruningNaturalSpawning && this.getGameRules().getBoolean("doMobSpawning")
 				&& this.worldData.getType() != WorldType.DEBUG_ALL_BLOCK_STATES
 				&& (this.allowMonsters || this.allowAnimals) && this.players.size() > 0) {
 			timings.mobSpawn.startTiming(); // Spigot
@@ -299,11 +318,13 @@ public class WorldServer extends World /*implements IAsyncTaskHandler*/ { // Pan
 		timings.doChunkMap.startTiming(); // Spigot
 		this.manager.flush();
 		timings.doChunkMap.stopTiming(); // Spigot
-		this.methodProfiler.c("village");
-		timings.doVillages.startTiming(); // Spigot
-		this.villages.tick();
-		this.siegeManager.a();
-		timings.doVillages.stopTiming(); // Spigot
+		if (!this.pruningPlan.disableVillagers()) {
+			this.methodProfiler.c("village");
+			timings.doVillages.startTiming(); // Spigot
+			this.villages.tick();
+			this.siegeManager.a();
+			timings.doVillages.stopTiming(); // Spigot
+		}
 		this.methodProfiler.c("portalForcer");
 		timings.doPortalForcer.startTiming(); // Spigot
 		this.Q.a(this.getTime());
@@ -543,7 +564,13 @@ public class WorldServer extends World /*implements IAsyncTaskHandler*/ { // Pan
 					this.methodProfiler.c("tickBlocks");
 					timings.chunkTicksBlocks.startTiming(); // Spigot
 					int randomTickSpeed = this.getGameRules().c("randomTickSpeed");
-					if (randomTickSpeed > 0) {
+					// WindyPit - mechanism pruning: no random ticks for player-less non-arena
+					// worlds. The arena world keeps random ticks so PvP-adjacent mechanics work.
+					final boolean skipRandomTick = pruningPlan.disableRandomTickNoPlayerRegions()
+							&& this.players.isEmpty()
+							&& !this.getMinecraftServer().getWindyPitConfig().pruning()
+									.isArenaWorld(this.getWorld().getName());
+					if (randomTickSpeed > 0 && !skipRandomTick) {
 						for (ChunkSection section : chunk.getSections()) {
 							if (section != null && section.shouldTick()) {
 								for (int l1 = 0; l1 < randomTickSpeed; ++l1) {
@@ -576,6 +603,14 @@ public class WorldServer extends World /*implements IAsyncTaskHandler*/ { // Pan
 			chunkTickList.clear();
 		}
 		// Spigot End
+	}
+
+	/** WindyPit - blocks whose scheduled updates are dropped when redstone/hopper pruning is on. */
+	private static boolean isPrunedRedstoneOrHopper(Block block) {
+		return block instanceof BlockRedstoneWire
+				|| block instanceof BlockRedstoneTorch
+				|| block instanceof BlockDiodeAbstract
+				|| block instanceof BlockHopper;
 	}
 
 	protected BlockPosition a(BlockPosition blockposition) {
@@ -667,6 +702,13 @@ public class WorldServer extends World /*implements IAsyncTaskHandler*/ { // Pan
 
 	@Override
 	public void tickEntities() {
+		// WindyPit - mechanism pruning: freeze non-arena worlds without viewers. The shared
+		// ThePit arena (pruning.arena-worlds) and any world with players always tick normally.
+		if (pruningPlan.disableNonArenaEntityMaintenance()
+				&& this.players.isEmpty()
+				&& !this.getMinecraftServer().getWindyPitConfig().pruning().isArenaWorld(this.getWorld().getName())) {
+			return;
+		}
 		if (false && this.players.isEmpty()) { // CraftBukkit - this prevents entity cleanup, other issues on servers
 												// with no players
 			if (this.emptyTime++ >= 1200) {
@@ -746,6 +788,14 @@ public class WorldServer extends World /*implements IAsyncTaskHandler*/ { // Pan
 					IBlockData iblockdata = this.getType(nextticklistentry.a);
 					co.aikar.timings.Timing timing = iblockdata.getBlock().getTiming(); // Spigot
 					timing.startTiming(); // Spigot
+
+					// WindyPit - mechanism pruning: redstone/hopper scheduled ticks are skipped at
+					// the real NMS decision point. PvP/projectile/teleport ticks are untouched.
+					if (pruningPlan.disableRedstoneAndHoppers()
+							&& isPrunedRedstoneOrHopper(iblockdata.getBlock())) {
+						timing.stopTiming(); // Spigot
+						continue;
+					}
 
 					if (iblockdata.getBlock().getMaterial() != Material.AIR
 							&& Block.a(iblockdata.getBlock(), nextticklistentry.a())) {

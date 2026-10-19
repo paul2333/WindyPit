@@ -194,6 +194,10 @@ public class TileEntityFurnace extends TileEntityContainer implements IUpdatePla
 
 	@Override
 	public void c() {
+		// WindyPit - mechanism pruning: furnace/cooking ticks are skipped at the tile-entity tick.
+		if (this.world != null && this.world.pruningPlan().disableFarmingAndFurnaces()) {
+			return;
+		}
 		boolean flag = (this.w() == Blocks.LIT_FURNACE); // CraftBukkit - SPIGOT-844 - Check if furnace block is lit
 															// using the block instead of burn time // PAIL: Rename
 		boolean flag1 = false;

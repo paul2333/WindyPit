@@ -118,6 +118,10 @@ public class BlockRedstoneTorch extends BlockTorch {
 
 	@Override
 	public void b(World world, BlockPosition blockposition, IBlockData iblockdata, Random random) {
+		// WindyPit - mechanism pruning: redstone torch scheduled updates are skipped.
+		if (world.pruningPlan().disableRedstoneAndHoppers()) {
+			return;
+		}
 		boolean flag = this.g(world, blockposition, iblockdata);
 		// Paper start
 		java.util.ArrayDeque<BlockRedstoneTorch.RedstoneUpdateInfo> redstoneUpdateInfos = world.redstoneUpdateInfos;

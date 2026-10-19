@@ -8,7 +8,14 @@ public class SecondaryWorldServer extends WorldServer {
 	public SecondaryWorldServer(MinecraftServer minecraftserver, IDataManager idatamanager, int i,
 			WorldServer worldserver, MethodProfiler methodprofiler, WorldData worldData,
 			org.bukkit.World.Environment env, org.bukkit.generator.ChunkGenerator gen) {
-		super(minecraftserver, idatamanager, worldData, i, methodprofiler, env, gen);
+		this(minecraftserver, idatamanager, i, worldserver, methodprofiler, worldData, env, gen, null);
+	}
+
+	public SecondaryWorldServer(MinecraftServer minecraftserver, IDataManager idatamanager, int i,
+			WorldServer worldserver, MethodProfiler methodprofiler, WorldData worldData,
+			org.bukkit.World.Environment env, org.bukkit.generator.ChunkGenerator gen,
+			com.windpvp.windspigot.config.MechanismPruningPlan pruningPlan) {
+		super(minecraftserver, idatamanager, worldData, i, methodprofiler, env, gen, pruningPlan);
 		// CraftBukkit end
 		this.a = worldserver;
 		/*

@@ -194,6 +194,26 @@ public class DedicatedServer extends MinecraftServer implements IMinecraftServer
 			// WindSpigot start - config
 			WindSpigotConfig.init((File) options.valueOf("windspigot-settings"));
 			// WindSpigot end
+
+			// WindyPit start - derive the WindyPit section from the server-owned document
+			final com.windpvp.windspigot.config.WindyPitConfig windyPitConfig;
+			try {
+				windyPitConfig = com.windpvp.windspigot.config.WindyPitConfig
+						.fromConfiguration(com.windpvp.windspigot.config.WindSpigotConfig.config);
+				LOGGER.info("Loaded windypit.yml: threading.mode=" + windyPitConfig.threading().mode()
+						+ ", arena-owner=" + windyPitConfig.threading().arenaOwner()
+						+ ", region-threads=" + windyPitConfig.threading().regionThreads()
+						+ ", pruning=" + windyPitConfig.features().mechanismPruning()
+						+ ", arena-worlds=" + windyPitConfig.pruning().arenaWorlds());
+				for (String warning : windyPitConfig.warnings()) {
+					LOGGER.warn("windypit.yml: " + warning);
+				}
+			} catch (RuntimeException e) {
+				LOGGER.error("Failed to load windypit.yml", e);
+				return false;
+			}
+			this.setWindyPitConfig(windyPitConfig);
+			// WindyPit end
 			
 			this.a(new DedicatedPlayerList(this));
 			org.spigotmc.SpigotConfig.init((File) options.valueOf("spigot-settings"));
@@ -326,6 +346,16 @@ public class DedicatedServer extends MinecraftServer implements IMinecraftServer
 				this.propertyManager.setProperty("max-build-height", this.getMaxBuildHeight());
 				DedicatedServer.LOGGER.info("Preparing level \"" + this.U() + "\"");
 				this.a(this.U(), this.U(), k, worldtype, s2);
+
+				// WindyPit start - scheduler/tick integration after worlds exist
+				this.windyTick = new com.windpvp.windspigot.scheduler.WindyPitTickIntegration(windyPitConfig);
+				this.windyTick.setWorlds(this.worldServer);
+				com.windpvp.windspigot.command.ThreadCpuSampler.get().start();
+				DedicatedServer.LOGGER.info("WindyPit scheduler initialized with "
+						+ windyPitConfig.threading().computeThreads() + " compute threads");
+				this.server.getCommandMap().register("windypit-tps", "WindyPit",
+						new com.windpvp.windspigot.command.WindyPitTpsCommand("windypit-tps"));
+				// WindyPit end
 				long i1 = System.nanoTime() - j;
 				String s3 = String.format("%.3fs", i1 / 1.0E9D);
 

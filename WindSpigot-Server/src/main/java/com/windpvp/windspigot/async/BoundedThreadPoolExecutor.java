@@ -18,6 +18,13 @@ public final class BoundedThreadPoolExecutor extends ThreadPoolExecutor {
 
     private final AtomicLong saturationEvents;
     private final AtomicLong rejectedTasks;
+    /**
+     * Exact accepted-task count. {@link ThreadPoolExecutor#getTaskCount()} is documented as
+     * approximate and can briefly lag a task that already ran, which made diagnostics/tests
+     * observe completed=1, submitted=0. This counter is incremented before submission and is
+     * therefore the authoritative "accepted work" figure.
+     */
+    private final AtomicLong acceptedTasks = new AtomicLong();
 
     public BoundedThreadPoolExecutor(int workerCount, int queueCapacity, ThreadFactory threadFactory) {
         this(workerCount, queueCapacity, threadFactory, new AtomicLong(), new AtomicLong());
@@ -59,8 +66,25 @@ public final class BoundedThreadPoolExecutor extends ThreadPoolExecutor {
     public Metrics snapshot() {
         return new Metrics(getPoolSize(), getActiveCount(), getQueue().size(),
                 getQueue().size() + getQueue().remainingCapacity(),
-                getCompletedTaskCount(), getTaskCount(),
+                getCompletedTaskCount(), acceptedTasks.get(),
                 saturationEvents.get(), rejectedTasks.get(), isShutdown());
+    }
+
+    /**
+     * Counts every accepted submission before the worker can run it, and rolls the count back
+     * when the executor rejects the submission. {@link ThreadPoolExecutor#getTaskCount()} is
+     * documented as approximate and can lag an already-running task, so it is not used for the
+     * diagnostics "submitted" figure.
+     */
+    @Override
+    public void execute(Runnable command) {
+        acceptedTasks.incrementAndGet();
+        try {
+            super.execute(command);
+        } catch (RuntimeException rejected) {
+            acceptedTasks.decrementAndGet();
+            throw rejected;
+        }
     }
 
     /**

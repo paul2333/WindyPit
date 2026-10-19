@@ -1,0 +1,54 @@
+# bots.yml
+# bot 配置的唯一存储（插件自动读写）。
+# 
+# 集群 = bots.groups.<名字>.*，每个集群独立设置生成点（即环绕中心）、
+# 数量（amount）、环绕半径/速度（patrol.orbit.radius/speed）；
+# 通用项 = bots.enabled / bots.amount / bots.health / bots.attack-damage /
+# bots.equipment.<slot> / bots.skin.*。
+# 
+# （2026-10-04 起不再写进 config.yml；手改本文件后重启即可生效。）
+bots:
+  enabled: true
+  amount: 20
+  health: 24.0
+  attack-damage: 1.0
+  player-damage: 8.0
+  target-range: 48.0
+  move-step: 0.11
+  performance:
+    attack-scan-ticks: 5
+    equipment-refresh-ticks: 100
+    max-spawns-per-tick: 2
+    detach-from-world-players: true
+    spatial-index: true
+  patrol:
+    points: []
+    mode: loop
+    orbit:
+      radius: 4.0
+      speed: 0.05
+  culling:
+    enabled: false
+    require-arena: false
+    activate-radius: 48.0
+    deactivate-radius: 64.0
+    max-active: 12
+    max-total-bots: 30
+    check-interval-ticks: 20
+  name: '&cBot'
+  name-visible: false
+  hide-from-tab: true
+  skin:
+    value: ''
+    signature: ''
+    heartbeat-ticks: 100
+  visibility:
+    show-radius: 20.0
+    check-interval-ticks: 10
+  equipment:
+    hand: ''
+    helmet: ''
+    chestplate: ''
+    leggings: ''
+    boots: ''
+

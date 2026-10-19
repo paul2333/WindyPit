@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import org.apache.commons.lang.Validate;
 import org.bukkit.plugin.IllegalPluginAccessException;
@@ -95,6 +96,9 @@ public class CraftScheduler implements BukkitScheduler {
 			new ArrayBlockingQueue<Runnable>(4096),
 			new com.google.common.util.concurrent.ThreadFactoryBuilder()
 					.setNameFormat("WindyPit Scheduler Thread - %1$d").setDaemon(true).build()); // bounded async scheduler
+	private static final Logger LOGGER = Logger.getLogger(CraftScheduler.class.getName());
+	private volatile boolean asyncExecutorShutdown;
+	private volatile boolean asyncExecutorShutdownTimedOut;
 	private CraftAsyncDebugger debugHead = new CraftAsyncDebugger(-1, null, null) {
 		@Override
 		StringBuilder debugTo(StringBuilder string) {
@@ -470,6 +474,46 @@ public class CraftScheduler implements BukkitScheduler {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Shutdown drain for the bounded async task pool: rejects new async submissions, lets already
+	 * accepted tasks finish and waits for the worker threads to terminate. Idempotent.
+	 *
+	 * @return true when the pool terminated within {@code timeoutMs}; false when work is still
+	 *         running and the explicit timeout state remains visible for the shutdown report
+	 */
+	public boolean shutdownAsyncExecutor(final long timeoutMs) {
+		asyncExecutorShutdown = true;
+		executor.shutdown();
+		final long timeout = Math.max(0L, timeoutMs);
+		try {
+			final boolean terminated = executor.awaitTermination(timeout, TimeUnit.MILLISECONDS);
+			asyncExecutorShutdownTimedOut = !terminated;
+			if (!terminated) {
+				LOGGER.warning("CraftScheduler async executor did not terminate within " + timeout + "ms (active="
+						+ executor.getActiveCount() + ", queued=" + executor.getQueue().size()
+						+ "); accepted async tasks may be abandoned at JVM exit");
+			}
+			return terminated;
+		} catch (InterruptedException interrupted) {
+			Thread.currentThread().interrupt();
+			asyncExecutorShutdownTimedOut = true;
+			LOGGER.log(Level.WARNING, "CraftScheduler async executor shutdown interrupted", interrupted);
+			return false;
+		}
+	}
+
+	public boolean isAsyncExecutorShutdown() {
+		return asyncExecutorShutdown;
+	}
+
+	public boolean asyncExecutorShutdownTimedOut() {
+		return asyncExecutorShutdownTimedOut;
+	}
+
+	public int pendingAsyncTaskCount() {
+		return executor.getQueue().size();
 	}
 
 	private void addTask(final CraftTask task) {

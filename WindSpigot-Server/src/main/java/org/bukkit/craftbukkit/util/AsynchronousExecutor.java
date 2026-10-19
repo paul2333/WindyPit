@@ -7,10 +7,13 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import org.apache.commons.lang.Validate;
 
@@ -233,6 +236,9 @@ public final class AsynchronousExecutor<P, T, C, E extends Throwable> {
 	final Queue<Task> finished = new ConcurrentLinkedQueue<Task>();
 	final Map<P, Task> tasks = new HashMap<P, Task>();
 	final ThreadPoolExecutor pool;
+	private static final Logger LOGGER = Logger.getLogger(AsynchronousExecutor.class.getName());
+	private volatile boolean closed;
+	private volatile boolean shutdownTimedOut;
 
 	/**
 	 * Uses a thread pool to pass executions to the provider.
@@ -255,10 +261,20 @@ public final class AsynchronousExecutor<P, T, C, E extends Throwable> {
 	 * This should always be synchronous.
 	 */
 	public void add(P parameter, C callback) {
+		if (closed) {
+			throw new RejectedExecutionException("AsynchronousExecutor is closed");
+		}
 		Task task = tasks.get(parameter);
 		if (task == null) {
-			tasks.put(parameter, task = new Task(parameter));
-			pool.execute(task);
+			final Task created = new Task(parameter);
+			tasks.put(parameter, created);
+			try {
+				pool.execute(created);
+			} catch (RejectedExecutionException rejected) {
+				tasks.remove(parameter, created);
+				throw rejected;
+			}
+			task = created;
 		}
 		task.callbacks.add(callback);
 	}
@@ -383,5 +399,49 @@ public final class AsynchronousExecutor<P, T, C, E extends Throwable> {
 
 	public void setActiveThreads(final int coreSize) {
 		pool.setCorePoolSize(coreSize);
+	}
+
+	/**
+	 * Shutdown drain: stops accepting new tasks, waits for already submitted stage-1 work and
+	 * terminates the worker pool. Idempotent.
+	 *
+	 * @return true when the pool terminated within {@code timeoutMs}; false leaves an explicit
+	 *         timeout state (plus pending/finished counts) for the shutdown report
+	 */
+	public boolean close(final long timeoutMs) {
+		closed = true;
+		pool.shutdown();
+		final long timeout = Math.max(0L, timeoutMs);
+		try {
+			final boolean terminated = pool.awaitTermination(timeout, TimeUnit.MILLISECONDS);
+			shutdownTimedOut = !terminated;
+			if (!terminated) {
+				LOGGER.log(Level.WARNING, "AsynchronousExecutor did not terminate within " + timeout + "ms (active="
+						+ pool.getActiveCount() + ", queued=" + pool.getQueue().size() + ", finished="
+						+ finished.size() + "); accepted stage-1 work is incomplete");
+			}
+			return terminated;
+		} catch (InterruptedException interrupted) {
+			Thread.currentThread().interrupt();
+			shutdownTimedOut = true;
+			LOGGER.log(Level.WARNING, "AsynchronousExecutor close interrupted", interrupted);
+			return false;
+		}
+	}
+
+	public boolean isClosed() {
+		return closed;
+	}
+
+	public boolean isShutdownTimedOut() {
+		return shutdownTimedOut;
+	}
+
+	public int pendingTaskCount() {
+		return pool.getQueue().size();
+	}
+
+	public int finishedTaskCount() {
+		return finished.size();
 	}
 }

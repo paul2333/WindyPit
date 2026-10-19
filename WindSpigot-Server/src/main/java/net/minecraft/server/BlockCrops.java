@@ -27,6 +27,10 @@ public class BlockCrops extends BlockPlant implements IBlockFragilePlantElement 
 
 	@Override
 	public void b(World world, BlockPosition blockposition, IBlockData iblockdata, Random random) {
+		// WindyPit - mechanism pruning: crop growth is skipped at the real random-tick point.
+		if (world.pruningPlan().disableFarmingAndFurnaces()) {
+			return;
+		}
 		super.b(world, blockposition, iblockdata, random);
 		if (world.isLightLevel(blockposition.up(), 9)) { // Paper
 			int i = iblockdata.get(BlockCrops.AGE).intValue();

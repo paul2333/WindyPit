@@ -1,0 +1,8 @@
+step,timestamp,command,exit_code,artifact,note
+baseline,2026-10-18T09:45:00+08:00,git rev-parse HEAD; git status --porcelain,0,baseline-head.txt;baseline-status.txt,HEAD 395fe4765d2757b3b567fa2eeabe358cbf12e17c
+P70-test,2026-10-18T10:18:00+08:00,.review\harness\mvn-jdk25.bat -o -B -pl WindSpigot-Server test,0,subagent-p70\P70-full-test-stdout.log,203 tests 0 failures 0 errors 0 skipped
+P70-install,2026-10-18T10:36:00+08:00,.review\harness\mvn-jdk25.bat -o -B clean install,0,P70-clean-install.log,203 tests; WindSpigot.jar rebuilt
+P65-rebuild,2026-10-18T10:38:00+08:00,mvn -o -B -pl WindSpigot-Server package -DskipTests,0,P65-rebuild.log,after YamlCommenter fix
+P65-smoke-1,2026-10-18T10:37:00+08:00,P65-run-smoke.ps1,0,P65-smoke-stdout.log,DONE=True; combat-plan=false at that time; yaml comment ERROR present
+P65-rebuild-2,2026-10-18T10:40:00+08:00,mvn -o -B -pl WindSpigot-Server package -DskipTests,0,P65-rebuild2.log,lowered missing-comment log to FINE
+P65-smoke-final,2026-10-18T10:41:00+08:00,P65-run-smoke.ps1,0,P65-smoke-result.txt,DONE=True; combat-plan=true; zero ERROR/SEVERE; clean stop

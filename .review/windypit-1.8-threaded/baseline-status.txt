@@ -1,0 +1,22 @@
+# WindyPit baseline status (Wave 0 close-out refresh, includes restored classes)
+# captured: 2026-10-17 00:33:06Z
+branch: windypit-1.8-threaded
+head: 6b64ceb6f36076e9d0524cf7b6718436a03dd0bb
+dirty_entries: 32
+
+## git status --short (full)
+ M .review/windypit-1.8-threaded/baseline-status.txt
+ M .review/windypit-1.8-threaded/dirty-manifest.csv
+ M .review/windypit-1.8-threaded/file-hashes.csv
+?? %SystemDrive%/
+?? .review/harness/
+?? .review/phase-results/harness/out/
+?? .review/phase-results/mutation/out/
+?? .review/windypit-1.8-threaded/audit/
+?? WindSpigot-Server/src/main/java/com/windpvp/windspigot/async/pathsearch/cache/
+?? WindSpigot-Server/src/main/java/com/windpvp/windspigot/cache/
+?? runtime/plugins/
+
+## notes
+- restored-from-history source files are untracked additions; no reset/clean/checkout used
+

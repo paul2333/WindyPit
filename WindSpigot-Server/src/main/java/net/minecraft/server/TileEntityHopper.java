@@ -198,6 +198,10 @@ public class TileEntityHopper extends TileEntityContainer implements IHopper, IU
 
 	@Override
 	public void c() {
+		// WindyPit - mechanism pruning: hopper transfer ticks are skipped at the tile-entity tick.
+		if (this.world != null && this.world.pruningPlan().disableRedstoneAndHoppers()) {
+			return;
+		}
 		if (this.world != null && !this.world.isClientSide) {
 			--this.g;
 			if (!this.n()) {

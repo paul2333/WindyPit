@@ -11,6 +11,7 @@ import org.apache.logging.log4j.Logger;
 
 import com.google.common.collect.Lists;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import com.falchus.spigot.optimizations.FastNetworkManager;
 import com.velocitypowered.natives.util.Natives; // Paper
 import com.windpvp.windspigot.protocol.MinecraftPipeline;
 
@@ -118,6 +119,19 @@ public class ServerConnection {
 							.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, SERVER_WRITE_MARK)
 							.childHandler(new MinecraftPipeline(this)).group(a.get(), b.get()).localAddress(ip, port))
 									.bind().syncUninterruptibly());
+		}
+	}
+
+	/**
+	 * W1-SHUTDOWN-DRAIN: flushes every tracker frame already accepted by the per-connection
+	 * FastNetworkManager queues before the event loops are stopped. Closed connections are counted
+	 * in the returned statistics instead of being silently skipped.
+	 */
+	public FastNetworkManager.DrainStats drainFastNetworkQueues() {
+		synchronized (this.getConnectedChannels()) {
+			this.addPending();
+			return FastNetworkManager.drainAll(
+					new java.util.ArrayList<NetworkManager>(this.getConnectedChannels()));
 		}
 	}
 

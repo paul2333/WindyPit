@@ -1,0 +1,146 @@
+{
+  "captured_at": "2026-10-17 00:33:06Z",
+  "repo": "WindyPit",
+  "branch": "windypit-1.8-threaded",
+  "head": "6b64ceb6f36076e9d0524cf7b6718436a03dd0bb",
+  "gate_command": ".review\\harness\\mvn-jdk25.bat -o -B clean install",
+  "exit_code": 0,
+  "build": "SUCCESS",
+  "elapsed_s": 47,
+  "junit": {
+    "tests_run": 96,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "artifacts": {
+    "WindSpigot-Server/target/WindSpigot.jar": "c932e96ce72024daefeb3fc76a99899ea48ad0d7399186744dc74f094d3c3f6b",
+    "WindSpigot-API/target/WindSpigot-API.jar": "5209ce4d192224246c91e9518cd5e53255ca20beb3f34349648ea178706edd17"
+  },
+  "fixes": {
+    "restored_from_history": [
+      "com/windpvp/windspigot/cache/Constants.java",
+      "com/windpvp/windspigot/async/pathsearch/cache/SearchCacheEntry.java",
+      "com/windpvp/windspigot/async/pathsearch/cache/SearchCacheEntryEntity.java",
+      "com/windpvp/windspigot/async/pathsearch/cache/SearchCacheEntryPosition.java"
+    ],
+    "via": "git show 6b64ceb~1:<path>"
+  },
+  "boundary_scan": {
+    "api_jars": "CLEAN",
+    "server_jar": "CLEAN; EXEMPT(baseline) 34 class entries = net/kyori/adventure/key (7) + net/kyori/examination (27), pre-existing upstream WindSpigot 1.8.8 bundle, W6 review; WARN 13 legacy io/papermc/paper 1.8.8 entries",
+    "scanner": ".review/harness/artifact-boundary-scan.ps1 rev3.2"
+  },
+  "log": ".review/windypit-1.8-threaded/audit/W0-BUILD-mvn-install.log",
+  "log_sha256": "bc6b68fc7d5eb995944983e5bbbeeeedc26df660984282de1514c06ac401156f",
+  "scanner_verified_at": "2026-10-17 00:34:38Z",
+  "w1_region_runtime": {
+    "captured_at": "2026-10-17 01:46:39Z",
+    "gate_test": {
+      "command": ".review\\harness\\mvn-jdk25.bat -o -B -pl WindSpigot-Server -Dsurefire.timeout=300 test",
+      "exit_code": 0,
+      "junit": "70/0/0/0",
+      "log": "audit/W1-REGION-RUNTIME-mvn-test.log",
+      "log_sha256": "a533bffb982feca47ac13ccbab55dc52c1ef815db8b245f80beef313236d8074"
+    },
+    "gate_install": {
+      "command": ".review\\harness\\mvn-jdk25.bat -o -B clean install",
+      "exit_code": 0,
+      "elapsed_s": 66,
+      "log": "audit/W1-REGION-RUNTIME-mvn-install.log",
+      "log_sha256": "3013d848b957b744597e0285475c73110e4d63164b0528a4514b7afceca46a91"
+    },
+    "scheduler_test_classes": [
+      "[INFO] Running com.windpvp.windspigot.scheduler.EntitySchedulerTest",
+      "[INFO] Running com.windpvp.windspigot.scheduler.GlobalRegionSchedulerTest",
+      "[INFO] Running com.windpvp.windspigot.scheduler.RegionSchedulerBoundedQueueTest",
+      "[INFO] Running com.windpvp.windspigot.scheduler.RegionSchedulerFifoTest",
+      "[INFO] Running com.windpvp.windspigot.scheduler.RegionSchedulerOwnerThreadTest",
+      "[INFO] Running com.windpvp.windspigot.scheduler.RegionSchedulerShutdownDrainTest",
+      "[INFO] Running com.windpvp.windspigot.scheduler.TaskRetirementTokenTest",
+      "[INFO] Running com.windpvp.windspigot.scheduler.ThreadViolationReporterTest"
+    ],
+    "new_main_classes": 14,
+    "new_test_classes": 8,
+    "notes": "2 test-caught issues fixed: shutdownDrain missing requestStop for pumped regions (post-close rejection contract); test depth assertion after recovery schedule"
+  },
+  "w1_tick_pipeline": {
+    "captured_at": "2026-10-17 02:00:31Z",
+    "gate": {
+      "exit_code": 0,
+      "junit": "87/0/0/0",
+      "log_sha256": "8207a6d56694e7da6adb07de041f0636c0218f5c75ba12a7606701335ac0913a"
+    },
+    "delivered": "TickPipeline.runSegment + WindyPitTickIntegration (global tick + snapshot/compute/commit segment, arena pump, shutdownDrain) + MinecraftServer field/seam wiring (CRLF preserved) + source-contract test with walk-up resolution"
+  },
+  "w1_entity_ownership": {
+    "captured_at": "2026-10-17 02:00:31Z",
+    "delivered": "EntityOwnershipService lifecycle (created/destroyed/migrated/quit/worldUnload/rebind) + checkOwner assertions + 6 tests; onWorldUnload returns destroyed-entity count (test-caught semantic fix)"
+  },
+  "w1_final_install": {
+    "exit_code": 0,
+    "build": "SUCCESS",
+    "elapsed_s": 55,
+    "log": "audit/W1-FINAL-mvn-install.log",
+    "log_sha256": "d10ff1c1ed69660801bf8fd89642d631877dda05225a2953753aa2ca77f2c00c",
+    "boundary_scan": "CLEAN"
+  },
+  "w2": {
+    "captured_at": "2026-10-17 03:45:04Z",
+    "gate": {
+      "exit_code": 0,
+      "junit": "107/0/0/0",
+      "log_sha256": "9d54def0e6db38947f0a"
+    },
+    "install": {
+      "exit_code": 0,
+      "build": "SUCCESS",
+      "elapsed_s": 53,
+      "log_sha256": "aa77f5d5af7a0089c115",
+      "boundary_scan": "CLEAN"
+    },
+    "delivered": {
+      "compute": "ComputePool bounded pool + stale-check delivery + 6 tests (DONE_VERIFIED)",
+      "tracker_core": "TrackerSnapshot/TrackerVisibilityPlanner/TrackerAsyncEngine + 10 tests (PARTIAL: NMS feed pending)",
+      "network_core": "NetworkSendQueue per-player bounded queues + 5 tests (PARTIAL: NetworkManager wiring pending)"
+    },
+    "test_caught_fixes": [
+      "planner disappeared-entity condition inverted (previousEntities containment check blocked legitimate removals)",
+      "test race: pumpOnce before compute delivery enqueued -> awaitQueueDepth polling",
+      "test data: entity 8 at distance 50 outside 48-block view distance"
+    ]
+  },
+  "w5_config": {
+    "captured_at": "2026-10-17 03:52:58Z",
+    "gate": {
+      "exit_code": 0,
+      "junit": "115/0/0/0",
+      "log_sha256": "e6c4ed42cddb8deb7f10"
+    },
+    "delivered": "WindyPitConfig: threading/features/rollback parsing with defaults, enum fallback, resolveThreads; 8 tests"
+  },
+  "w4_diagnostics": {
+    "captured_at": "2026-10-17 03:58:28Z",
+    "gate": {
+      "exit_code": 0,
+      "junit": "121/0/0/0",
+      "log_sha256": "229412813dbd3cb8"
+    },
+    "delivered": "WindyPitDiagnostics aggregate (TPS, tick percentiles, per-region/compute/network reports) + 6 tests"
+  },
+  "w5_pruning": {
+    "captured_at": "2026-10-17 04:02:12Z",
+    "delivered": "MechanismPruningPlan: 8 per-mechanism toggles derived from config, 4 tests"
+  },
+  "w4_crash_storage": {
+    "captured_at": "2026-10-17 04:08:35Z",
+    "delivered": "DurableOperationLog + DurableStateRecovery + 6 tests",
+    "junit": "131/0/0/0"
+  },
+  "w3_npc_bot": {
+    "captured_at": "2026-10-17 04:12:31Z",
+    "delivered": "BotBudget + BotDecisionDispatcher + 6 tests",
+    "junit": "137/0/0/0"
+  }
+}
+

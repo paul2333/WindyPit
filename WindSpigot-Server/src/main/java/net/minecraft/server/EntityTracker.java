@@ -27,6 +27,20 @@ public class EntityTracker {
 
 	private final WorldServer world;
 	private int e; 
+	// WindyPit start - plan-driven visibility (W1-REGION-REAL)
+	// When enabled, add/remove visibility decisions come from the immutable plan produced on the
+	// world's owner thread; the primary thread only sends movement/velocity packets and applies
+	// the plan's add/remove pairs exactly once. Compat mode leaves this false (legacy behaviour).
+	private volatile boolean planDrivenVisibility;
+
+	public boolean isPlanDrivenVisibility() {
+		return this.planDrivenVisibility;
+	}
+
+	public void setPlanDrivenVisibility(boolean planDrivenVisibility) {
+		this.planDrivenVisibility = planDrivenVisibility;
+	}
+	// WindyPit end
 	
 	public EntityTracker(WorldServer worldserver) {
 		this.world = worldserver;
@@ -149,11 +163,18 @@ public class EntityTracker {
 	public void updatePlayers() {
 		int shardCount = Math.max(1, WindSpigotConfig.trackingThreads);
 		int shard = 0;
+		final boolean planDriven = this.planDrivenVisibility;
 		for (EntityTrackerEntry entry : c) {
 			// Keep Bukkit/NMS mutation synchronous, but spread packet queue ownership
 			// across configured tracker shards so one connection queue does not become
 			// the single hot queue for every entity.
-			entry.update(shard++ % shardCount);
+			// WindyPit: when the world owner produced a visibility plan, the primary thread
+			// only emits movement/velocity packets; add/remove is applied from the plan.
+			if (planDriven) {
+				entry.updateMovementOnly(shard++ % shardCount);
+			} else {
+				entry.update(shard++ % shardCount);
+			}
 		}
 	}
 

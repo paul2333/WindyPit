@@ -1,0 +1,9 @@
+step,command,exit_code,artifact
+1,"git rev-parse --abbrev-ref HEAD; git rev-parse HEAD",0,P70-git-head.txt
+2,"git status --short -- WindSpigot-Server docs/windypit-1.8-threaded/owner-contract.md; git diff --stat -- WindSpigot-Server docs/windypit-1.8-threaded/owner-contract.md",0,"P70-changed-files.txt;P70-git-diff-stat.txt"
+3,".review\harness\mvn-jdk25.bat -o -B -pl WindSpigot-Server test",0,"P70-full-test-stdout.log;P70-full-test-stderr.log;P70-full-test-exit-code.txt"
+4,"surefire XML aggregation over WindSpigot-Server/target/surefire-reports/TEST-*.xml",0,"P70-surefire-summary.csv;P70-new-tests-surefire.csv"
+5,"git diff --check -- WindSpigot-Server docs/windypit-1.8-threaded/owner-contract.md",0,"P70-git-diff-check.txt;P70-git-diff-check-exit-code.txt"
+6,"Select-String WorldTicker.java -Pattern 'worldserver.doTick();|worldserver.tickEntities();|WorldTrackerTick.run(this);'",0,P70-ticker-audit.txt
+7,"Select-String scheduler/*.java -Pattern 'CallerRunsPolicy|new LinkedBlockingQueue|newCachedThreadPool|newFixedThreadPool'",0,P70-forbidden-pattern-audit.txt
+8,"Get-FileHash -Algorithm SHA256 owner-contract.md + key evidence logs",0,P70-artifact-sha256.txt

@@ -1,0 +1,22 @@
+phase,step,command,exit_code,tests,failures,result,log_path,log_sha256,owner,next
+05,git inventory,"git status/diff/log",0,0,0,"11 dirty paths captured; user docs preserved",status-porcelain.txt;diff-worktree.patch,n/a,DSH,classify
+05,jdk,".review\harness\mvn-jdk25.bat -version",0,0,0,"Java 25.0.3 Microsoft",P05-server-test.log,n/a,DSH,build
+05,server baseline,"mvn -o -B -pl WindSpigot-Server test",0,159,0,"green baseline",P05-server-test.log,pending,DSH,clean install
+05,server baseline install,"mvn -o -B clean install",0,159,0,"BUILD SUCCESS",P05-server-clean-install.log,pending,DSH,plugin baseline
+05,plugin baseline,"gradlew :base:test --offline --no-daemon --rerun-tasks",0,1503,0,"green with movement.filter excluded",plugin dsh-run/P05-base-test-baseline.log,pending,DSH,phase 20
+10,owner domains implementation,"edit WorldRegionRuntime/NmsTrackerPlanApplier/WorldTicker/EntityTracker",0,0,0,"compiled",n/a,n/a,DSH,tests
+10,server tests,"mvn -o -B -pl WindSpigot-Server test",0,180,0,"180 tests green",P10-P15-server-clean-install.log,pending,DSH,live smoke
+15,boundary scan,"artifact-boundary-scan.ps1 -JarPaths ...",0,0,0,"CLEAN; 0 violations",P15-boundary-scan.log,pending,DSH,diagnostics
+10/15,live smoke,"java -jar WindSpigot.jar --noconsole + RCON + protocol47 probe",0,0,0,"REGION; 2 owner threads; submitted=1 planned=1 applied=1; clean stop",P10-live-smoke-stdout.log,pending,DSH,record PARTIAL
+15,diagnostics,"RCON windypit-tps",0,0,0,"TPS/MSPT/per-world p50-p99/owner domains",P10-windypit-tps.txt,pending,DSH,plugin review
+20,plugin default test 3x,"gradlew :base:test --offline --no-daemon --rerun-tasks",0,1545,0,"3 consecutive green runs",plugin dsh-run/sub-phase20/default-test-run1..3.log,pending,subagent+Lead,phase 25
+20,plugin check,"gradlew :base:check --offline --no-daemon",0,1545,0,"green",plugin dsh-run/sub-phase20/base-check.log,pending,subagent,phase 25
+20,plugin targeted 10x,"gradlew :base:test --tests com.windypit.pit.movement.* --tests net.mizukilab.pit.movement.filter.* --rerun-tasks",0,42,0,"10 runs green",plugin dsh-run/sub-phase20/targeted-run1..10.log,pending,subagent,Lead review
+25,plugin full test 3x,"gradlew :base:test --offline --no-daemon --rerun-tasks",0,1550,0,"3 consecutive green runs",plugin dsh-run/sub-phase25/full-run1..3.log,pending,DSH,phase 30
+25,plugin wiring test,"gradlew :base:test --tests com.windypit.pit.scheduler.Phase25ProductionWiringTest --rerun-tasks",0,5,0,"config keys + production call sites",plugin dsh-run/sub-phase25/wiring.log,pending,DSH,phase 30
+30,durable ledger,"see plugin run",pending,pending,pending,"in progress",plugin dsh-run/sub-phase30/,pending,subagent,review
+40,server final package,"mvn -o -B -pl WindSpigot-Server package",0,180,0,"BUILD SUCCESS; worktree jar 50C74119...4404",P40-server-package-final2.log,DSH,"commit"
+40,server commit,"git commit 395fe47",0,0,0,"32 paths; 1886 insertions",n/a,n/a,DSH,"clean checkout"
+40,server clean checkout,"git archive 395fe47 + mvn -o -B clean install",0,180,0,"BUILD SUCCESS; jar 29BBA792...BF9B",P40-clean-checkout-windypit-build-correct.log,DSH,"final report"
+40,plugin clean checkout,"git archive 729e239 + gradlew :base:test :base:build",0,1559,0,"BUILD SUCCESS; jar 9990A0E0...55A3",P40-clean-checkout-plugin-build.log,DSH,"final report"
+40,plugin cross-repo smoke,"WindSpigot + ThePitUltra + LuckPerms/PlaceholderAPI/ProtocolLib",0,0,0,"plugin enabled; adapter upgraded to WINDYPIT_KERNEL; 2 owner threads; clean stop",P40-plugin-smoke3-stdout.log,DSH,"final report"

@@ -26,6 +26,7 @@ import org.bukkit.craftbukkit.Main;
 
 import com.google.common.base.Charsets;
 import com.google.common.collect.Lists;
+import com.falchus.spigot.optimizations.FastNetworkManager;
 import com.mojang.authlib.GameProfile;
 import com.mojang.authlib.GameProfileRepository;
 import com.mojang.authlib.minecraft.MinecraftSessionService;
@@ -295,7 +296,9 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
 							this.methodProfiler)).b();
 				} else {
 					world = (WorldServer) (new WorldServer(this, idatamanager, worlddata, dimension,
-							this.methodProfiler, org.bukkit.World.Environment.getEnvironment(dimension), gen)).b();
+							this.methodProfiler, org.bukkit.World.Environment.getEnvironment(dimension), gen,
+							pruningPlanFor(s1))).b();
+					world.setPruningPlan(pruningPlanFor(s1));
 				}
 
 				world.a(worldsettings);
@@ -350,7 +353,8 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
 				worlddata.checkName(name); // CraftBukkit - Migration did not rewrite the level.dat; This forces 1.8 to
 											// take the last loaded world as respawn (in this case the end)
 				world = (WorldServer) new SecondaryWorldServer(this, idatamanager, dimension, this.worlds.get(0),
-						this.methodProfiler, worlddata, org.bukkit.World.Environment.getEnvironment(dimension), gen)
+						this.methodProfiler, worlddata, org.bukkit.World.Environment.getEnvironment(dimension), gen,
+						pruningPlanFor(name))
 								.b();
 			}
 
@@ -493,12 +497,36 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
 			MinecraftServer.LOGGER.info("Stopping server");
 			SpigotTimings.stopServer(); // Spigot
 
+			// WindSpigot start - WindyPit shutdown drain (W1-SHUTDOWN-DRAIN)
+			try {
+				MinecraftServer.LOGGER.info("Draining WindyPit scheduler...");
+				if (this.windyTick != null) {
+					this.windyTick.shutdownDrain(30000L);
+					MinecraftServer.LOGGER.info("WindyPit scheduler drained successfully");
+				}
+			} catch (InterruptedException ie) {
+				MinecraftServer.LOGGER.warn("WindyPit scheduler drain interrupted", ie);
+				Thread.currentThread().interrupt();
+			} catch (IllegalStateException ise) {
+				MinecraftServer.LOGGER.error("WindyPit scheduler failed to drain in time", ise);
+			}
+			// WindSpigot end
+
 			// CraftBukkit start
 			if (this.server != null) {
 				this.server.disablePlugins();
 			}
 			// CraftBukkit end
 			if (this.aq() != null) {
+				// WindSpigot start - flush accepted tracker frames before the event loops stop
+				// (W1-SHUTDOWN-DRAIN)
+				FastNetworkManager.DrainStats networkDrain = this.aq().drainFastNetworkQueues();
+				if (networkDrain.hasFailures()) {
+					MinecraftServer.LOGGER.error("Network drain incomplete: " + networkDrain.describe());
+				} else {
+					MinecraftServer.LOGGER.info("Network drain complete: " + networkDrain.describe());
+				}
+				// WindSpigot end
 				this.aq().stopServer();
 			}
 
@@ -525,6 +553,18 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
 				 */
 			}
 
+			// WindSpigot start - close the chunk IO executor after the worlds are saved
+			// (W1-SHUTDOWN-DRAIN)
+			try {
+				if (!org.bukkit.craftbukkit.chunkio.ChunkIOExecutor.close(10000L)) {
+					MinecraftServer.LOGGER.error("Chunk IO executor did not terminate within 10000ms; accepted chunk loads may be incomplete (pending="
+							+ org.bukkit.craftbukkit.chunkio.ChunkIOExecutor.pendingTaskCount() + ")");
+				}
+			} catch (RuntimeException chunkIoFailure) {
+				MinecraftServer.LOGGER.error("Chunk IO executor shutdown failed", chunkIoFailure);
+			}
+			// WindSpigot end
+
 			if (this.n.d()) {
 				this.n.e();
 			}
@@ -540,6 +580,16 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
 			} else {
 				AsyncExplosions.stopExecutor(); // Nacho
 			}
+
+			// WindSpigot start - stop the CraftScheduler async pool before the JVM exits
+			// (W1-SHUTDOWN-DRAIN)
+			if (this.server != null) {
+				if (!this.server.getScheduler().shutdownAsyncExecutor(10000L)) {
+					MinecraftServer.LOGGER.error("CraftScheduler async executor did not terminate within 10000ms; pending="
+							+ this.server.getScheduler().pendingAsyncTaskCount());
+				}
+			}
+			// WindSpigot end
 		}
 	}
 
@@ -1062,6 +1112,12 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
 
 		// WindSpigot - parallel worlds
 		this.worldTickerManager.tick();
+
+		// WindSpigot start - WindyPit tick pipeline (W1-TICK-PIPELINE)
+		if (this.windyTick != null) {
+			this.windyTick.onTickSeam();
+		}
+		// WindSpigot end
 
 		// WindSpigot start - priority process queue
 		while (!priorityProcessQueue.isEmpty()) {
@@ -1759,6 +1815,35 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
 		return WindSpigot.getInstance();
 	}
 	
+	// WindyPit start - scheduler/tick integration (W1-TICK-PIPELINE)
+	protected com.windpvp.windspigot.config.WindyPitConfig windyPitConfig;
+	protected com.windpvp.windspigot.config.MechanismPruningPlan mechanismPruningPlan;
+	protected com.windpvp.windspigot.scheduler.WindyPitTickIntegration windyTick;
+
+	public void setWindyPitConfig(com.windpvp.windspigot.config.WindyPitConfig config) {
+		this.windyPitConfig = config;
+		this.mechanismPruningPlan = com.windpvp.windspigot.config.MechanismPruningPlan.fromConfig(config);
+	}
+
+	public com.windpvp.windspigot.config.MechanismPruningPlan getMechanismPruningPlan() {
+		return this.mechanismPruningPlan != null ? this.mechanismPruningPlan
+				: com.windpvp.windspigot.config.MechanismPruningPlan.builder().build();
+	}
+
+	public com.windpvp.windspigot.config.WindyPitConfig getWindyPitConfig() {
+		return this.windyPitConfig != null ? this.windyPitConfig
+				: com.windpvp.windspigot.config.WindyPitConfig.defaults();
+	}
+
+	public com.windpvp.windspigot.config.MechanismPruningPlan pruningPlanFor(String worldName) {
+		return com.windpvp.windspigot.config.MechanismPruningPlan.fromConfig(getWindyPitConfig(), worldName);
+	}
+
+	public com.windpvp.windspigot.scheduler.WindyPitTickIntegration getWindyTick() {
+		return this.windyTick;
+	}
+	// WindyPit end
+
 	// WindSpigot - MSPT (milliseconds per tick)
 	public double getLastMspt() {
 		return this.lastMspt;

@@ -28,6 +28,10 @@ public class BlockNetherWart extends BlockPlant {
 
 	@Override
 	public void b(World world, BlockPosition blockposition, IBlockData iblockdata, Random random) {
+		// WindyPit - mechanism pruning: nether wart growth is skipped at the random-tick point.
+		if (world.pruningPlan().disableFarmingAndFurnaces()) {
+			return;
+		}
 		int i = iblockdata.get(BlockNetherWart.AGE).intValue();
 
 		if (i < 3 && random.nextInt(Math.max(1, (int) world.growthOdds / world.spigotConfig.wartModifier * 10)) == 0) { // Spigot
