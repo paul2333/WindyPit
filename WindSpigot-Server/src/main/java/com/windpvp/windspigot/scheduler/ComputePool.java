@@ -120,7 +120,7 @@ public final class ComputePool {
     }
 
     private final BlockingQueue<Runnable> queue;
-    private final Thread[] workers;
+    private volatile Thread[] workers;
     private final RegionScheduler scheduler;
     private final StaleCheck staleCheck;
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -132,6 +132,11 @@ public final class ComputePool {
     private final AtomicLong staleDropped = new AtomicLong();
     private final AtomicLong deliveryRejected = new AtomicLong();
 
+    private final int threadCount;
+    private final int queueCapacity;
+    private final Object workerLock = new Object();
+    private volatile boolean workersStarted;
+
     public ComputePool(int threads, int queueCapacity, RegionScheduler scheduler, StaleCheck staleCheck) {
         if (threads <= 0) {
             throw new IllegalArgumentException("threads must be positive");
@@ -142,18 +147,54 @@ public final class ComputePool {
         this.queue = new ArrayBlockingQueue<Runnable>(queueCapacity);
         this.scheduler = scheduler;
         this.staleCheck = staleCheck;
-        this.workers = new Thread[threads];
-        for (int i = 0; i < threads; i++) {
-            final int id = i;
-            workers[i] = new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    loop();
-                }
-            }, "WindyPit-Compute-" + id);
-            workers[i].setDaemon(true);
-            workers[i].start();
+        this.threadCount = threads;
+        this.queueCapacity = queueCapacity;
+        this.workers = new Thread[0];
+    }
+
+    /**
+     * Starts the worker threads on first use.
+     *
+     * <p>The pool is created during server boot on every mode, but the only production callers of
+     * {@link #submit} are optional features. Starting N/2 threads that never receive a job costs
+     * memory and a wake-up per idle timeout for no benefit, so the workers are created lazily and
+     * stay absent entirely while the pool is unused.
+     */
+    private void startWorkersIfNeeded() {
+        if (workersStarted) {
+            return;
         }
+        synchronized (workerLock) {
+            if (workersStarted) {
+                return;
+            }
+            final Thread[] created = new Thread[threadCount];
+            for (int i = 0; i < threadCount; i++) {
+                final int id = i;
+                created[i] = new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        loop();
+                    }
+                }, "WindyPit-Compute-" + id);
+                created[i].setDaemon(true);
+            }
+            this.workers = created;
+            workersStarted = true;
+            for (Thread worker : created) {
+                worker.start();
+            }
+        }
+    }
+
+    /** True once at least one job has forced the worker threads to start. */
+    public boolean isStarted() {
+        return workersStarted;
+    }
+
+    /** Configured worker count (0 while the pool has never been used). */
+    public int workerCount() {
+        return workers.length;
     }
 
     public <T> void submit(final ComputeJob<T> job) {
@@ -161,6 +202,7 @@ public final class ComputePool {
             rejected.incrementAndGet();
             throw new RejectedTaskException("compute pool is closed");
         }
+        startWorkersIfNeeded();
         if (!queue.offer(new Runnable() {
             @Override
             public void run() {
