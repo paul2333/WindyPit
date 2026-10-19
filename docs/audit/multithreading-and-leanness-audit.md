@@ -88,6 +88,37 @@ if (ownerPlans) {
 
 **真正跑在 `WindyPit-Region-*` 线程上的只有**：`TrackerVisibilityPlanner.plan(...)` —— 即"谁应该看见谁"的可见性规划计算（`WorldRegionRuntime` → `PlanFunction`）。
 
+**REGION 模式实测**（`threading.mode=REGION`、`region-threads: 4`、无玩家）：
+
+```
+Loaded windypit.yml: threading.mode=REGION, arena-owner=PRIMARY, region-threads=4
+World owner domains: 3 | applied=0 dropped=0 rejected=0 failed=0
+  World world         [world-owner-0]: submitted=0 planned=0 applied=0 ... owner=WindyPit-Region-world-owner-0
+  World world_nether  [world-owner-1]: submitted=0 planned=0 applied=0 ... owner=WindyPit-Region-world-owner-1
+  World world_the_end [world-owner-2]: submitted=0 planned=0 applied=0 ... owner=WindyPit-Region-world-owner-2
+
+Multithreading:
+  Mode: REGION | Effective: ACTIVE (3 owner domains on dedicated threads)
+  CPUs: 24 | JVM threads: 23 | total: 0.93 cores (4%)
+  Per-group CPU (1s window):
+    Primary (Server thread)   0.0% | 0.00 cores | 1 threads
+    Region owner             0.0% | 0.00 cores | 3 threads
+```
+
+**关键发现**：3 个 owner 线程已创建且绑定到 3 个世界，但 `submitted=0 planned=0 applied=0`，
+CPU 占用 0%。原因是 `WorldRegionRuntime.java:326-331`：
+
+```java
+if (world.players.isEmpty()) {
+    // No viewers: stop planning and force a full visibility resync when a player joins
+    state.previous = null;
+    return;
+}
+```
+
+无人服时 `submitWorld` 直接返回，**永远不会向 owner 线程提交规划任务**。所以"REGION 模式已生效"
+在无人服场景下只意味着"线程建好了"，不代表"有并行工作在跑"。
+
 **仍在主线程串行执行的**：
 
 | 工作 | 证据 |
