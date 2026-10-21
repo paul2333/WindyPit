@@ -46,27 +46,19 @@ public final class WindyPitConfig {
         private final ThreadingMode mode;
         private final ArenaOwner arenaOwner;
         private final int regionThreads;
-        private final String entityThreads;
         private final String computeThreads;
-        private final String persistenceThreads;
 
-        ThreadingConfig(ThreadingMode mode, ArenaOwner arenaOwner, int regionThreads,
-                        String entityThreads, String computeThreads, String persistenceThreads) {
+        ThreadingConfig(ThreadingMode mode, ArenaOwner arenaOwner, int regionThreads, String computeThreads) {
             this.mode = mode;
             this.arenaOwner = arenaOwner;
             this.regionThreads = regionThreads;
-            this.entityThreads = entityThreads;
             this.computeThreads = computeThreads;
-            this.persistenceThreads = persistenceThreads;
         }
 
         public ThreadingMode mode() { return mode; }
         public ArenaOwner arenaOwner() { return arenaOwner; }
         public int regionThreads() { return regionThreads; }
-        /** "auto" for CPU-bound heuristic, or a positive integer. */
-        public String entityThreads() { return entityThreads; }
         public String computeThreads() { return computeThreads; }
-        public String persistenceThreads() { return persistenceThreads; }
 
         /** Resolves "auto" to the given default; numeric strings pass through. */
         public int resolveThreads(String value, int autoDefault) {
@@ -84,24 +76,14 @@ public final class WindyPitConfig {
 
     public static final class FeaturesConfig {
         private final boolean asyncEntityTracking;
-        private final boolean asyncVisualProjection;
-        private final boolean asyncPathfinding;
-        private final boolean asyncPersistence;
         private final boolean mechanismPruning;
 
-        FeaturesConfig(boolean asyncEntityTracking, boolean asyncVisualProjection,
-                       boolean asyncPathfinding, boolean asyncPersistence, boolean mechanismPruning) {
+        FeaturesConfig(boolean asyncEntityTracking, boolean mechanismPruning) {
             this.asyncEntityTracking = asyncEntityTracking;
-            this.asyncVisualProjection = asyncVisualProjection;
-            this.asyncPathfinding = asyncPathfinding;
-            this.asyncPersistence = asyncPersistence;
             this.mechanismPruning = mechanismPruning;
         }
 
         public boolean asyncEntityTracking() { return asyncEntityTracking; }
-        public boolean asyncVisualProjection() { return asyncVisualProjection; }
-        public boolean asyncPathfinding() { return asyncPathfinding; }
-        public boolean asyncPersistence() { return asyncPersistence; }
         public boolean mechanismPruning() { return mechanismPruning; }
     }
 
@@ -204,8 +186,8 @@ public final class WindyPitConfig {
 
     public static WindyPitConfig defaults() {
         return new WindyPitConfig(
-            new ThreadingConfig(ThreadingMode.COMPAT, ArenaOwner.PRIMARY, 1, "auto", "auto", "bounded"),
-            new FeaturesConfig(true, true, true, true, true),
+            new ThreadingConfig(ThreadingMode.REGION, ArenaOwner.PRIMARY, 4, "auto"),
+            new FeaturesConfig(true, true),
             new RollbackConfig(false, false, false),
             new PruningConfig(new LinkedHashMap<String, Boolean>(), new LinkedHashMap<String, Map<String, Boolean>>(),
                     Collections.singletonList("world")),
@@ -245,21 +227,16 @@ public final class WindyPitConfig {
     }
 
     private static WindyPitConfig fromYaml(org.bukkit.configuration.ConfigurationSection yaml) {
-        ThreadingMode mode = parseEnum(yaml, "threading.mode", ThreadingMode.COMPAT);
+        ThreadingMode mode = parseEnum(yaml, "threading.mode", ThreadingMode.REGION);
         ArenaOwner arenaOwner = parseEnum(yaml, "threading.arena-owner", ArenaOwner.PRIMARY);
-        int regionThreads = yaml.getInt("threading.region-threads", 1);
-        String entityThreads = yaml.getString("threading.entity-threads", "auto");
+        int regionThreads = yaml.getInt("threading.region-threads", 4);
         String computeThreads = yaml.getString("threading.compute-threads", "auto");
-        String persistenceThreads = yaml.getString("threading.persistence-threads", "bounded");
 
         ThreadingConfig threading = new ThreadingConfig(mode, arenaOwner,
-                Math.max(1, regionThreads), entityThreads, computeThreads, persistenceThreads);
+                Math.max(1, regionThreads), computeThreads);
 
         FeaturesConfig features = new FeaturesConfig(
                 yaml.getBoolean("features.async-entity-tracking", true),
-                yaml.getBoolean("features.async-visual-projection", true),
-                yaml.getBoolean("features.async-pathfinding", true),
-                yaml.getBoolean("features.async-persistence", true),
                 yaml.getBoolean("features.mechanism-pruning", true)
         );
 

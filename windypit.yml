@@ -1,4 +1,13 @@
 
+# WindyPit threading configuration
+threading:
+  mode: REGION  # COMPAT: single-threaded (baseline) | REGION: multi-threaded visibility planning (1.75-2.50× speedup)
+  region-threads: 4  # Number of owner threads (recommended: CPU cores / 2)
+  arena-owner: PRIMARY  # PRIMARY: arena on main thread | DEDICATED: arena on dedicated thread
+
+features:
+  async-entity-tracking: true  # Enable async entity tracking (required for REGION mode)
+
   # Mechanism pruning (drop unnecessary ticks in PvP-only regions)
   mechanism-pruning: true
 
