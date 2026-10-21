@@ -5,12 +5,18 @@ import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 
+import com.falchus.spigot.optimizations.FastNetworkManager;
 import com.windpvp.windspigot.performance.TickPerformanceMonitor;
 import com.windpvp.windspigot.async.BoundedThreadPoolExecutor;
 import com.windpvp.windspigot.async.pathsearch.SearchHandler;
 import xyz.sculas.nacho.async.AsyncExplosions;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.WorldServer;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class TicksPerSecondCommand extends Command {
 
@@ -26,9 +32,14 @@ public class TicksPerSecondCommand extends Command {
 		if (!testPermission(sender)) {
 			return true;
 		}
+		try {
 
 		// PaperSpigot start - Further improve tick handling
 		MinecraftServer server = MinecraftServer.getServer();
+		if (server == null) {
+			sender.sendMessage(ChatColor.RED + "TPS is unavailable while the server is starting.");
+			return true;
+		}
 		String[] tpsAvg = new String[] {
 				format(server.tps5s.getAverage()), format(server.tps10s.getAverage()),
 				format(server.tps1.getAverage()), format(server.tps5.getAverage()),
@@ -39,46 +50,46 @@ public class TicksPerSecondCommand extends Command {
 		
 		int entityCount = 0;
 		
-		for (WorldServer world : server.worlds) {
-			entityCount = entityCount + world.entityList.size();
+		if (server.worlds != null) for (WorldServer world : server.worlds) {
+			if (world != null && world.entityList != null) entityCount = entityCount + world.entityList.size();
 		}
 		
 		int tileEntityCount = 0;
-		long queuedTrackingPackets = 0L;
-		long droppedTrackingPackets = 0L;
+		List<FastNetworkManager> trackingManagers = new ArrayList<FastNetworkManager>();
 		
-		for (WorldServer world : server.worlds) {
-			tileEntityCount = tileEntityCount + world.tileEntityList.size();
+		if (server.worlds != null) for (WorldServer world : server.worlds) {
+			if (world == null) continue;
+			if (world.tileEntityList != null) tileEntityCount = tileEntityCount + world.tileEntityList.size();
+			if (world.players == null) continue;
 			for (net.minecraft.server.EntityHuman human : world.players) {
 				if (human instanceof net.minecraft.server.EntityPlayer) {
-					net.minecraft.server.NetworkManager network = ((net.minecraft.server.EntityPlayer) human)
-							.playerConnection.networkManager;
-					queuedTrackingPackets += network.fastNetworkManager.queuedPacketCount();
-					droppedTrackingPackets += network.fastNetworkManager.droppedPacketCount();
+					net.minecraft.server.PlayerConnection connection = ((net.minecraft.server.EntityPlayer) human).playerConnection;
+					trackingManagers.add(trackingManager(connection));
 				}
 			}
 		}
+		long[] trackingPacketCounts = trackingPacketCounts(trackingManagers);
+		long queuedTrackingPackets = trackingPacketCounts[0];
+		long droppedTrackingPackets = trackingPacketCounts[1];
 		
 		sender.sendMessage(ChatColor.DARK_AQUA + "WindSpigot Performance:");
 		sender.sendMessage(ChatColor.AQUA + "TPS from last 5s, 10s, 1m, 5m, 15m: "
 				+ org.apache.commons.lang.StringUtils.join(tpsAvg, ", "));
-		TickPerformanceMonitor.TickStats tenSecondTicks = server.performanceMonitor.tickStats(20 * 10);
-		TickPerformanceMonitor.TickStats oneMinuteTicks = server.performanceMonitor.tickStats(20 * 60);
+		TickPerformanceMonitor monitor = server.performanceMonitor;
+		TickPerformanceMonitor.TickStats tenSecondTicks = monitor == null ? null : monitor.tickStats(20 * 10);
+		TickPerformanceMonitor.TickStats oneMinuteTicks = monitor == null ? null : monitor.tickStats(20 * 60);
 		sender.sendMessage(ChatColor.AQUA + "Tick durations (min/med/p95/p99/max ms) from last 10s, 1m: "
 				+ formatTickStats(tenSecondTicks) + "   " + formatTickStats(oneMinuteTicks));
-		TickPerformanceMonitor.CpuStats tenSecondCpu = server.performanceMonitor
-				.cpuStats(TickPerformanceMonitor.cpuWindowSamples(10));
-		TickPerformanceMonitor.CpuStats oneMinuteCpu = server.performanceMonitor
-				.cpuStats(TickPerformanceMonitor.cpuWindowSamples(60));
-		TickPerformanceMonitor.CpuStats fifteenMinuteCpu = server.performanceMonitor
-				.cpuStats(TickPerformanceMonitor.cpuWindowSamples(15 * 60));
+		TickPerformanceMonitor.CpuStats tenSecondCpu = monitor == null ? null : monitor.cpuStats(TickPerformanceMonitor.cpuWindowSamples(10));
+		TickPerformanceMonitor.CpuStats oneMinuteCpu = monitor == null ? null : monitor.cpuStats(TickPerformanceMonitor.cpuWindowSamples(60));
+		TickPerformanceMonitor.CpuStats fifteenMinuteCpu = monitor == null ? null : monitor.cpuStats(TickPerformanceMonitor.cpuWindowSamples(15 * 60));
 		sender.sendMessage(ChatColor.AQUA + "CPU usage from last 10s, 1m, 15m:");
-		sender.sendMessage(ChatColor.GREEN + "  " + formatCpu(tenSecondCpu.getSystemPercent()) + ", "
-				+ formatCpu(oneMinuteCpu.getSystemPercent()) + ", "
-				+ formatCpu(fifteenMinuteCpu.getSystemPercent()) + " (system)");
-		sender.sendMessage(ChatColor.GREEN + "  " + formatCpu(tenSecondCpu.getProcessPercent()) + ", "
-				+ formatCpu(oneMinuteCpu.getProcessPercent()) + ", "
-				+ formatCpu(fifteenMinuteCpu.getProcessPercent()) + " (process)");
+		sender.sendMessage(ChatColor.GREEN + "  " + formatCpu(systemPercent(tenSecondCpu)) + ", "
+				+ formatCpu(systemPercent(oneMinuteCpu)) + ", "
+				+ formatCpu(systemPercent(fifteenMinuteCpu)) + " (system)");
+		sender.sendMessage(ChatColor.GREEN + "  " + formatCpu(processPercent(tenSecondCpu)) + ", "
+				+ formatCpu(processPercent(oneMinuteCpu)) + ", "
+				+ formatCpu(processPercent(fifteenMinuteCpu)) + " (process)");
 		sender.sendMessage(ChatColor.AQUA + "Current Memory Usage: " + ChatColor.GREEN
 				+ ((Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / (1024 * 1024)) + "/"
 				+ (Runtime.getRuntime().totalMemory() / (1024 * 1024)) + " mb (Max: "
@@ -94,11 +105,40 @@ public class TicksPerSecondCommand extends Command {
 		sender.sendMessage(ChatColor.AQUA + "Async queues: " + ChatColor.GREEN
 				+ formatExecutor("explosion", explosionMetrics) + ChatColor.GRAY + ", "
 				+ ChatColor.GREEN + formatExecutor("path", pathMetrics));
-		boolean mobAi = !server.worlds.isEmpty() && server.worlds.get(0).nachoSpigotConfig.enableMobAI;
+		boolean mobAi = server.worlds != null && !server.worlds.isEmpty() && server.worlds.get(0) != null
+				&& server.worlds.get(0).nachoSpigotConfig != null && server.worlds.get(0).nachoSpigotConfig.enableMobAI;
 		sender.sendMessage(ChatColor.AQUA + "Mob AI: " + ChatColor.GREEN + mobAi);
 		sender.sendMessage(ChatColor.AQUA + "Milliseconds to Run Last Tick: " + ChatColor.GREEN + Math.round(server.getLastMspt() * 100.0) / 100.0);
 		
 		return true;
+		} catch (Throwable failure) {
+			sender.sendMessage(ChatColor.RED + "TPS diagnostics unavailable: "
+					+ (failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage()));
+			Logger.getLogger("WindSpigot").log(Level.WARNING, "/tps diagnostics failed", failure);
+			return true;
+		}
+	}
+
+	static long[] trackingPacketCounts(Iterable<FastNetworkManager> managers) {
+		long queued = 0L;
+		long dropped = 0L;
+		if (managers == null) return new long[] {queued, dropped};
+		for (FastNetworkManager manager : managers) {
+			if (manager == null) continue;
+			try {
+				queued += manager.queuedPacketCount();
+				dropped += manager.droppedPacketCount();
+			} catch (RuntimeException ignored) {
+				// A connection can be torn down while diagnostics are collected.
+			}
+		}
+		return new long[] {queued, dropped};
+	}
+
+	static FastNetworkManager trackingManager(net.minecraft.server.PlayerConnection connection) {
+		if (connection == null) return null;
+		net.minecraft.server.NetworkManager network = connection.networkManager;
+		return network == null ? null : network.fastNetworkManager;
 	}
 
 	private static String format(double tps) // PaperSpigot - made static
@@ -108,7 +148,7 @@ public class TicksPerSecondCommand extends Command {
 	}
 
 	private static String formatTickStats(TickPerformanceMonitor.TickStats stats) {
-		if (stats.getSampleCount() == 0) {
+		if (stats == null || stats.getSampleCount() == 0) {
 			return "N/A/N/A/N/A/N/A/N/A";
 		}
 		return formatMillis(stats.getMinNanos()) + "/" + formatMillis(stats.getMedianNanos()) + "/"
@@ -122,6 +162,14 @@ public class TicksPerSecondCommand extends Command {
 
 	private static String formatCpu(double percent) {
 		return Double.isNaN(percent) ? "N/A" : Math.round(percent) + "%";
+	}
+
+	private static double systemPercent(TickPerformanceMonitor.CpuStats stats) {
+		return stats == null ? Double.NaN : stats.getSystemPercent();
+	}
+
+	private static double processPercent(TickPerformanceMonitor.CpuStats stats) {
+		return stats == null ? Double.NaN : stats.getProcessPercent();
 	}
 
 	private static String formatExecutor(String name, BoundedThreadPoolExecutor.Metrics metrics) {
