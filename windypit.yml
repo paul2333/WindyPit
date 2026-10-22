@@ -9,8 +9,9 @@ threading:
   # no players submits no work, so one thread covers the ThePit layout. Raise it only when
   # several worlds hold players at the same time.
   region-threads: 1
-  # PRIMARY: ThePit arena work runs on the main thread (same thread as Bukkit). DEDICATED is
-  # opt-in and has not been runtime-verified with ThePitUltimate.
+  # PRIMARY: the kernel arena region is pumped on the main thread. DEDICATED moves only kernel
+  # arena-region tasks to a fixed worker; ThePitUltimate routes no work there (all Bukkit state
+  # stays on the main thread), so DEDICATED just adds an idle thread.
   arena-owner: PRIMARY
   # ComputePool workers, created on first use. ThePitUltimate splits bot AI into 4 slices per
   # tick (AI_SLICES=4), so more than 4 workers adds no bot-AI parallelism; its other jobs are

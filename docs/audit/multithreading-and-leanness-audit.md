@@ -6,6 +6,10 @@
 
 > **修复状态**：第 1.1 节的"12 个空转线程"已在 `d4d3a9a` 修复并实测验证（JVM 线程 33 → 20）。
 > 其余结论（多线程实际并行范围、698 行零引用代码、5 个死配置键）仍然有效。
+>
+> **2026-10-22 更正**：第 1.3 节"ComputePool 是死代码"与第 2.1 节 `ThreadViolationReporter` / `ThreadContext`
+> "零引用"不成立 —— ThePitUltimate 经反射使用 ComputePool，后两者被 `RegionScheduler` 引用。
+> 默认模式已改为 REGION。最新核查与修复见 [2026-10-22-thepit-joint-tuning.md](2026-10-22-thepit-joint-tuning.md)。
 
 ---
 
