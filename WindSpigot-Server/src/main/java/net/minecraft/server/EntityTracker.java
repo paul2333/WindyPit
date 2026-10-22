@@ -33,12 +33,55 @@ public class EntityTracker {
 	// the plan's add/remove pairs exactly once. Compat mode leaves this false (legacy behaviour).
 	private volatile boolean planDrivenVisibility;
 
+	/**
+	 * WindyPit: 最近一次"计划真正被应用"的时间戳（毫秒）。
+	 *
+	 * <p>【2026-10-23 可用性修复】plan-driven 模式下 {@link #updatePlayers()} 会走
+	 * {@code updateMovementOnly}，<b>完全跳过 add/remove</b> —— 这是有意的（add/remove
+	 * 由计划负责）。但它带来一个单点故障：只要计划流断了（完成队列满被丢弃、
+	 * worker 挂起、applyPending 没跑到），玩家就<b>再也看不到任何实体</b>，
+	 * 而且没有任何自动恢复机制。原实现里 {@code setPlanDrivenVisibility}
+	 * 只在世界注册时被设置一次，运行期从不回检。</p>
+	 *
+	 * <p>现在记录"计划最后一次生效的时刻"，超过宽限期仍未生效就自动退回原版
+	 * {@code entry.update(0)} 路径。宁可短暂多花一点 CPU，也不能让整世界的实体消失。</p>
+	 *
+	 * <p>用时间戳而不是 tick 序号：本类拿不到可靠的世界 tick 计数，
+	 * 而墙钟语义在"服务端卡顿"时同样有效（卡顿本身也不该让实体消失）。</p>
+	 */
+	private volatile long lastPlanAppliedMillis = 0L;
+
+	/** 计划流中断多久后自动退回原版可见性（毫秒）。1000ms ≈ 20 tick。 */
+	private static final long PLAN_STALL_MILLIS = 1000L;
+
+	/** 由 tick 集成在世界 owner 线程应用计划成功后调用。 */
+	public void markPlanApplied() {
+		this.lastPlanAppliedMillis = System.currentTimeMillis();
+	}
+
 	public boolean isPlanDrivenVisibility() {
 		return this.planDrivenVisibility;
 	}
 
 	public void setPlanDrivenVisibility(boolean planDrivenVisibility) {
 		this.planDrivenVisibility = planDrivenVisibility;
+		// 开启时把基线拉到"现在"，避免刚开启就被判定为停滞。
+		this.lastPlanAppliedMillis = System.currentTimeMillis();
+	}
+
+	/**
+	 * 计划流是否已经停滞太久（需要退回原版可见性）。
+	 *
+	 * @return true 表示应当忽略 planDriven、走 {@code entry.update(0)}
+	 */
+	private boolean planStalled() {
+		final long last = this.lastPlanAppliedMillis;
+		if (last <= 0L) {
+			// 从未收到过计划：开启后立刻就该有基线（setPlanDrivenVisibility 已拉齐），
+			// 走到这里说明 baseline 丢失，按停滞处理以保安全。
+			return true;
+		}
+		return System.currentTimeMillis() - last > PLAN_STALL_MILLIS;
 	}
 	// WindyPit end
 	
@@ -161,19 +204,22 @@ public class EntityTracker {
 	}
 
 	public void updatePlayers() {
-		int shardCount = Math.max(1, WindSpigotConfig.trackingThreads);
-		int shard = 0;
-		final boolean planDriven = this.planDrivenVisibility;
+		// The tracker is single-writer on the primary thread. The old per-entry shard index was
+		// only a packet-queue selector for the removed async tracker; it added a modulo per
+		// entity and multiplied per-connection queues without any concurrency. One FIFO per
+		// connection is both cheaper and strictly ordered.
+		//
+		// WindyPit: 计划流停滞时退回原版路径（见 planStalled 的说明）。
+		// 这是可用性兜底：宁可让主线程多做一次 add/remove 计算，
+		// 也不能让整世界的实体因为"计划没送到"而从所有客户端消失。
+		final boolean planDriven = this.planDrivenVisibility && !this.planStalled();
 		for (EntityTrackerEntry entry : c) {
-			// Keep Bukkit/NMS mutation synchronous, but spread packet queue ownership
-			// across configured tracker shards so one connection queue does not become
-			// the single hot queue for every entity.
 			// WindyPit: when the world owner produced a visibility plan, the primary thread
 			// only emits movement/velocity packets; add/remove is applied from the plan.
 			if (planDriven) {
-				entry.updateMovementOnly(shard++ % shardCount);
+				entry.updateMovementOnly(0);
 			} else {
-				entry.update(shard++ % shardCount);
+				entry.update(0);
 			}
 		}
 	}

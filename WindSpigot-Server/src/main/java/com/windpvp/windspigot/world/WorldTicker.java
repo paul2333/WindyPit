@@ -112,7 +112,19 @@ public class WorldTicker implements Runnable, WorldTrackerTick.Target {
 		}
 		WorldTrackerTick.run(this);
 		if (ownerPlans) {
-			worldRegions.submitWorld(worldserver);
+			// 【2026-10-23 可用性修复】把"计划流是否还活着"回报给 tracker。
+			//
+			// plan-driven 模式下 tracker 跳过 add/remove、完全依赖计划；
+			// 一旦计划流断掉（完成队列满被丢弃、owner 线程挂起），玩家就再也看不到实体，
+			// 而原实现没有任何自动恢复。EntityTracker 据这个时间戳判断停滞并退回原版路径。
+			//
+			// 判据选在"本 tick 成功提交了新快照"而不是"应用了计划"：
+			// 计划是异步产出的，健康状态下也会有"本 tick 没有新计划可应用"的正常空窗，
+			// 用 applied > 0 会误判为停滞。真正的中断是**连提交都失败**（队列满/已关闭）
+			// 且持续超过阈值 —— 那才是必须退回原版的时刻。
+			if (worldRegions.submitWorld(worldserver)) {
+				worldserver.getTracker().markPlanApplied();
+			}
 		}
 		// WindyPit end
 		// this.methodProfiler.b();

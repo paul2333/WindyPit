@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -53,6 +54,16 @@ public final class WorldRegionRuntime {
     /** Pure planning function; the production implementation delegates to the real planner. */
     public interface PlanFunction {
         TrackerVisibilityPlanner.Plan plan(TrackerSnapshot current, TrackerSnapshot previous);
+
+        /**
+         * Visibility-only variant with the previous plan's visible sets. The default keeps
+         * legacy/test implementations working (they ignore the carried map and derive it);
+         * the production planner overrides this to remove the second O(V*E) pass.
+         */
+        default TrackerVisibilityPlanner.Plan planVisibility(TrackerSnapshot current,
+                TrackerSnapshot previous, Map<Integer, Set<Integer>> previousVisible) {
+            return plan(current, previous);
+        }
     }
 
     /** Applies one visibility plan to a live world. Must run on the primary/owner thread. */
@@ -150,6 +161,10 @@ public final class WorldRegionRuntime {
         final LongAdder rejected = new LongAdder();
         final LongAdder failed = new LongAdder();
         volatile TrackerSnapshot previous;
+        // Published by the primary thread only after the plan was applied to the live tracker.
+        // The generation check makes the pair (previous snapshot, applied visible set) consistent.
+        volatile Map<Integer, Set<Integer>> appliedVisible;
+        volatile long appliedVisibleGeneration = -1L;
         volatile boolean active = true;
         volatile long appliedGeneration;
 
@@ -157,6 +172,11 @@ public final class WorldRegionRuntime {
             this.worldName = worldName;
             this.domain = domain;
             this.completed = new ArrayBlockingQueue<Plan>(queueCapacity);
+        }
+
+        void clearAppliedVisible() {
+            appliedVisible = null;
+            appliedVisibleGeneration = -1L;
         }
     }
 
@@ -180,7 +200,14 @@ public final class WorldRegionRuntime {
         this(scheduler, planner == null ? null : new PlanFunction() {
             @Override
             public TrackerVisibilityPlanner.Plan plan(TrackerSnapshot current, TrackerSnapshot previous) {
-                return planner.plan(current, previous, null);
+                // Production consumes only add/remove; skip the unused change-class tables.
+                return planner.planVisibility(current, previous);
+            }
+
+            @Override
+            public TrackerVisibilityPlanner.Plan planVisibility(TrackerSnapshot current,
+                    TrackerSnapshot previous, Map<Integer, Set<Integer>> previousVisible) {
+                return planner.planVisibility(current, previous, previousVisible);
             }
         }, applier, maxDomains, planQueueCapacity);
     }
@@ -242,6 +269,10 @@ public final class WorldRegionRuntime {
             if (!liveWorldNames.contains(e.getKey()) && e.getValue().active) {
                 e.getValue().active = false;
                 e.getValue().completed.clear();
+                e.getValue().clearAppliedVisible();
+                // Drop the last immutable snapshot; an unloaded world name otherwise retains
+                // O(entities + viewers) objects for the life of the server.
+                e.getValue().previous = null;
                 retired.add(e.getKey());
             }
         }
@@ -261,15 +292,23 @@ public final class WorldRegionRuntime {
      * Submits one planning job for the world. Must be called on the primary thread with an
      * immutable snapshot built after the world tick.
      */
-    public void submitSnapshot(String worldName, final TrackerSnapshot snapshot) {
+    /**
+     * @return {@code true} 表示快照已成功入队到 owner 线程的计划队列。
+     *         被拒绝/已关闭时返回 {@code false} —— 调用方据此判断"计划流是否还活着"，
+     *         持续 false 会让 tracker 退回原版可见性，避免整世界实体消失。
+     */
+    public boolean submitSnapshot(String worldName, final TrackerSnapshot snapshot) {
         if (closed || snapshot == null) {
-            return;
+            return false;
         }
         final WorldState state = byWorld.get(worldName);
         if (state == null || !state.active) {
-            return;
+            return false;
         }
         final TrackerSnapshot previous = state.previous;
+        final Map<Integer, Set<Integer>> priorVisible = previous != null
+                && state.appliedVisibleGeneration == previous.generation()
+                ? state.appliedVisible : null;
         final long generation = snapshot.generation();
         final TrackerSnapshot current = snapshot;
         try {
@@ -278,7 +317,8 @@ public final class WorldRegionRuntime {
                 public void run() {
                     final long startedNanos = System.nanoTime();
                     try {
-                        final TrackerVisibilityPlanner.Plan plan = planFunction.plan(current, previous);
+                        final TrackerVisibilityPlanner.Plan plan =
+                                planFunction.planVisibility(current, previous, priorVisible);
                         state.planned.increment();
                         final PlanningObserver observer = planningObserver;
                         if (observer != null) {
@@ -291,21 +331,26 @@ public final class WorldRegionRuntime {
                             state.dropped.increment();
                             droppedTotal.incrementAndGet();
                             state.previous = null;
+                            state.clearAppliedVisible();
                         }
                     } catch (Throwable t) {
                         state.failed.increment();
                         failedTotal.incrementAndGet();
                         state.previous = null;
+                        state.clearAppliedVisible();
                     }
                 }
             });
             state.submitted.increment();
             // Advance only after a successful enqueue; a lost plan resets to a full resync.
             state.previous = current;
+            return true;
         } catch (RejectedTaskException e) {
             state.rejected.increment();
             rejectedTotal.incrementAndGet();
             state.previous = null;
+            state.clearAppliedVisible();
+            return false;
         }
     }
 
@@ -314,23 +359,34 @@ public final class WorldRegionRuntime {
      * Must be called on the primary thread after the world tick and only when the world has
      * players (a world without viewers produces no useful visibility work).
      */
-    public void submitWorld(WorldServer world) {
+    /**
+     * 提交本 tick 的世界快照给 owner 线程。
+     *
+     * @return {@code true} 表示快照**确实进入了计划队列**。
+     *         调用方（WorldTicker）据此给 tracker 打"计划流仍活着"的时间戳：
+     *         队列满/已关闭导致提交失败时返回 {@code false}，
+     *         持续失败会让 tracker 自动退回原版可见性，避免整世界实体消失。
+     */
+    public boolean submitWorld(WorldServer world) {
         if (closed || world == null) {
-            return;
+            return false;
         }
         final String worldName = world.getWorld().getName();
         final WorldState state = byWorld.get(worldName);
         if (state == null || !state.active) {
-            return;
+            return false;
         }
         if (world.players.isEmpty()) {
             // No viewers: stop planning and force a full visibility resync when a player joins,
             // so a stale snapshot can never drive add/remove decisions after an empty period.
             state.previous = null;
-            return;
+            state.clearAppliedVisible();
+            // 没有观察者：plan-driven 的 add/remove 本来就没有对象，
+            // 这不算"计划流断了"，按成功回报以免误触发退回。
+            return true;
         }
         final long generation = state.generation.incrementAndGet();
-        submitSnapshot(worldName, buildSnapshot(world, worldName, generation));
+        return submitSnapshot(worldName, buildSnapshot(world, worldName, generation));
     }
 
     private static TrackerSnapshot buildSnapshot(WorldServer world, String worldName, long generation) {
@@ -390,6 +446,11 @@ public final class WorldRegionRuntime {
             }
             if (ok) {
                 state.appliedGeneration = plan.generation();
+                // Publish only after the plan was applied: the next tick's previousVisible is
+                // guaranteed to describe the tracker state the client actually has.
+                state.appliedVisible = plan.visibility().visible();
+                state.appliedVisibleGeneration = state.appliedVisible == null
+                        ? -1L : plan.generation();
                 state.applied.increment();
                 appliedTotal.incrementAndGet();
                 applied++;
@@ -397,6 +458,7 @@ public final class WorldRegionRuntime {
                 state.failed.increment();
                 failedTotal.incrementAndGet();
                 state.previous = null;
+                state.clearAppliedVisible();
             }
         }
         return applied;
