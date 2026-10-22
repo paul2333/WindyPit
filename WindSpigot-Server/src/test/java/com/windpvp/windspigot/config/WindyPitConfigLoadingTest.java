@@ -20,9 +20,12 @@ public class WindyPitConfigLoadingTest {
 
         WindyPitConfig config = WindyPitConfig.load(nonExistent);
 
-        assertEquals(WindyPitConfig.ThreadingMode.COMPAT, config.threading().mode());
+        // 2026-10-22: the shipped default is now REGION with 4 owner threads.
+        // COMPAT is still available as an explicit opt-out (and via rollback flags),
+        // but a missing file must not silently disable all off-thread planning work.
+        assertEquals(WindyPitConfig.ThreadingMode.REGION, config.threading().mode());
         assertEquals(WindyPitConfig.ArenaOwner.PRIMARY, config.threading().arenaOwner());
-        assertEquals(1, config.threading().regionThreads());
+        assertEquals(4, config.threading().regionThreads());
         assertTrue(config.features().mechanismPruning());
         assertFalse(config.rollback().forcePrimaryThreadArena());
     }

@@ -116,7 +116,9 @@ public class WindyPitConfigSingleOwnerTest {
     @Test
     public void missingFileFallsBackToDefaults() {
         WindyPitConfig config = WindyPitConfig.fromConfiguration(null);
-        assertEquals(WindyPitConfig.ThreadingMode.COMPAT, config.threading().mode());
-        assertEquals(1, config.threading().regionThreads());
+        // 2026-10-22: shipped defaults are REGION / 4 owner threads so a fresh install
+        // gets off-thread visibility planning instead of silently running single-threaded.
+        assertEquals(WindyPitConfig.ThreadingMode.REGION, config.threading().mode());
+        assertEquals(4, config.threading().regionThreads());
     }
 }
