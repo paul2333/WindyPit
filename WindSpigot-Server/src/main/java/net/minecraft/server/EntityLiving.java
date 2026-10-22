@@ -841,8 +841,24 @@ public abstract class EntityLiving extends Entity {
 
 				// PaperSpigot start - Disable explosion knockback
 				boolean knockbackCancelled = false;
-				if (flag && !(knockbackCancelled = world.paperSpigotConfig.disableExplosionKnockback
+				// WindSpigot start - 鱼竿命中不应产生击退（2026-10-22）
+				//
+				// 【问题】鱼竿勾中目标时走的是
+				//   movingobjectposition.entity.damageEntity(DamageSource.projectile(hook, owner), 0.0F)
+				// 伤害是 0，但这里只判断 `flag && !explosion` 就施加击退：
+				// 目标没在无敌帧时 flag 保持 true ⇒ 走下面 EntityFishingHook 分支
+				// （rodHorizontal/rodVertical）施加一次横向击退。
+				// 随后鱼竿把目标"拉向玩家"，玩家看到的就是"拉回 + 方向相同的第二次击退"。
+				//
+				// 【原版行为】鱼竿勾人只负责勾住并拉拽，不额外击退。所以这里对
+				// "鱼竿 + 0 伤害"直接跳过击退，等价于恢复原版手感；真正造成伤害的
+				// 鱼竿（自定义附魔等）仍然保留击退。
+				final boolean rodZeroDamage = f <= 0.0F
+						&& damagesource instanceof EntityDamageSourceIndirect
+						&& ((EntityDamageSourceIndirect) damagesource).getProximateDamageSource() instanceof EntityFishingHook;
+				if (!rodZeroDamage && flag && !(knockbackCancelled = world.paperSpigotConfig.disableExplosionKnockback
 						&& damagesource.isExplosion() && this instanceof EntityHuman)) {
+					// WindSpigot end
 					// PaperSpigot end
 					this.world.broadcastEntityEffect(this, (byte) 2);
 					if (damagesource != DamageSource.DROWN) {
