@@ -7,6 +7,7 @@ import net.minecraft.server.WorldServer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Logger;
 
 /**
  * Host-side holder of the WindyPit scheduling backbone. MinecraftServer owns one instance and
@@ -27,6 +28,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * data is handed to an owner thread, and only immutable plans come back.</p>
  */
 public final class WindyPitTickIntegration {
+
+    private static final Logger LOGGER = Logger.getLogger("WindyPit");
 
     private final RegionScheduler regionScheduler = new RegionScheduler();
     private final WorldOwnerRegistry worldOwners;
@@ -69,8 +72,11 @@ public final class WindyPitTickIntegration {
         this.entityScheduler = new EntityScheduler(regionScheduler, regionScheduler.diagnostics());
 
         // Apply compute-threads config
+        // 【2026-10-22】auto 从 cores/2 改为 clamp(cores-1, 1, 8)：
+        // 纯计算池只该给主线程留 1 核，而不是把一半核心闲置。
+        final int cores = Runtime.getRuntime().availableProcessors();
         int computeThreads = config.threading().resolveThreads(config.threading().computeThreads(),
-            Math.max(1, Runtime.getRuntime().availableProcessors() / 2));
+            Math.max(1, Math.min(8, cores - 1)));
         this.computePool = new ComputePool(computeThreads, 1024, regionScheduler, new ComputePool.StaleCheck() {
             @Override
             public boolean isCurrent(String regionId, long generation, int entityId, long sequence) {
@@ -83,14 +89,29 @@ public final class WindyPitTickIntegration {
                 && config.features().asyncEntityTracking()
                 && !config.rollback().disableAsyncTracking()
                 && !config.rollback().disableRegionScheduler();
+        final int domains = regionMode ? Math.max(1, config.threading().regionThreads()) : 0;
         if (regionMode) {
-            int domains = Math.max(1, config.threading().regionThreads());
             this.worldRegions = new WorldRegionRuntime(regionScheduler,
                     new TrackerVisibilityPlanner(TrackerVisibilityPlanner.defaultLowLatencyTypeIds(), null),
                     new NmsTrackerPlanApplier(), domains, 4);
         } else {
             this.worldRegions = null;
         }
+
+        // 【2026-10-22】把"多核到底有没有生效"打成一行启动日志。
+        // 之前只能靠插件侧的反射推断，运维看到 PUMPED_PRIMARY 也无法确认是配置没生效
+        // 还是探测失败。这里由服务端自己说清楚：核数、arena 执行模式、各池线程数。
+        LOGGER.info("WindyPit threading: cores=" + cores
+                + ", mode=" + config.threading().mode()
+                + ", arena=" + arena.mode()
+                + (arena.mode() == ExecutionMode.DEDICATED_THREAD
+                        ? "(worker=WindyPit-Region-arena)" : "(pumped by primary thread)")
+                + ", regionMode=" + regionMode
+                + ", regionThreads=" + domains
+                + ", computeThreads=" + computeThreads
+                + " (config=" + config.threading().computeThreads() + ")"
+                + ", rollback{forcePrimaryArena=" + config.rollback().forcePrimaryThreadArena()
+                + ", disableRegionScheduler=" + config.rollback().disableRegionScheduler() + "}");
 
         pipeline = new TickPipeline(new TickPipeline.Target() {
             @Override

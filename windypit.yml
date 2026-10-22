@@ -6,17 +6,23 @@ threading:
   # COMPAT: everything on the main thread (rollback path).
   mode: REGION
   # Upper bound on owner threads. Domains are created per registered world, and a world with
-  # no players submits no work, so one thread covers the ThePit layout. Raise it only when
-  # several worlds hold players at the same time.
-  region-threads: 1
+  # no players submits no work. "auto" = clamp(cores/2, 1, 4)（2026-10-22 起支持 auto；
+  # 此前写 auto 会被 getInt 静默读成 1）。
+  region-threads: auto
   # PRIMARY: the kernel arena region is pumped on the main thread. DEDICATED moves only kernel
-  # arena-region tasks to a fixed worker; ThePitUltimate routes no work there (all Bukkit state
-  # stays on the main thread), so DEDICATED just adds an idle thread.
+  # arena-region tasks to a fixed worker.
+  #
+  # 【2026-10-22】这里保持 PRIMARY 是**有意的**：插件生产代码里没有任何 runArenaTask 调用方
+  # （只有测试），arena 队列永远是空的。切成 DEDICATED 只会多一条空转线程，还会让
+  # 以后误把 Bukkit 状态丢进 arena 的改动变成跨线程 bug。真正的多核来自：
+  #   1) region-threads（世界可见性规划）；
+  #   2) compute-threads（bot AI / 伤害聚合）；
+  #   3) 插件自有的 profileIo / auxIo / 音乐定时器。
+  # 若将来确实把工作路由进 arena，再改成 DEDICATED。
   arena-owner: PRIMARY
-  # ComputePool workers, created on first use. ThePitUltimate splits bot AI into 4 slices per
-  # tick (AI_SLICES=4), so more than 4 workers adds no bot-AI parallelism; its other jobs are
-  # short per-player scoreboard refreshes. "auto" = CPU cores / 2.
-  compute-threads: 4
+  # ComputePool workers, created on first use. "auto" = clamp(cores-1, 1, 8)
+  # （2026-10-22 由 cores/2 改为 cores-1：纯计算池只该给主线程留 1 核）。
+  compute-threads: auto
 
 features:
   # Must stay true for REGION mode to plan visibility off the main thread.

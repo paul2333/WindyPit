@@ -78,6 +78,19 @@ public final class WindyPitConfig {
         }
     }
 
+    /** 解析线程数配置：支持 {@code auto}（用默认值）与正整数。 */
+    static int resolveThreadCount(String value, int autoDefault) {
+        if (value == null || "auto".equalsIgnoreCase(value.trim())) {
+            return autoDefault;
+        }
+        try {
+            final int parsed = Integer.parseInt(value.trim());
+            return parsed > 0 ? parsed : autoDefault;
+        } catch (NumberFormatException ignored) {
+            return autoDefault;
+        }
+    }
+
     public static final class FeaturesConfig {
         private final boolean asyncEntityTracking;
         private final boolean mechanismPruning;
@@ -233,7 +246,12 @@ public final class WindyPitConfig {
     private static WindyPitConfig fromYaml(org.bukkit.configuration.ConfigurationSection yaml) {
         ThreadingMode mode = parseEnum(yaml, "threading.mode", ThreadingMode.REGION);
         ArenaOwner arenaOwner = parseEnum(yaml, "threading.arena-owner", ArenaOwner.PRIMARY);
-        int regionThreads = yaml.getInt("threading.region-threads", 1);
+        // 【2026-10-22】region-threads 现在支持 "auto"：此前用 getInt 读，
+        // 写 auto 会静默退回 1（等于关掉了世界域并行），而配置里看起来"已经设过了"。
+        final int defaultRegionThreads =
+                Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors() / 2));
+        final int regionThreads = resolveThreadCount(
+                yaml.getString("threading.region-threads", "1"), defaultRegionThreads);
         String computeThreads = yaml.getString("threading.compute-threads", "auto");
 
         ThreadingConfig threading = new ThreadingConfig(mode, arenaOwner,

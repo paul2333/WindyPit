@@ -48,6 +48,27 @@ public class WindyPitTpsCommand extends Command {
                 + ChatColor.GRAY + " | " + ChatColor.AQUA + "Arena owner: " + ChatColor.GREEN
                 + windyTick.config().threading().arenaOwner());
 
+        // 【2026-10-22】Bukkit 异步池：饱和时所有 runTaskAsynchronously 会永久排队，
+        // 而且不抛异常、不打日志（真实事故：音乐播放器占满后玩家卡「正在加载档案」）。
+        // 这一行是现场唯一能直接看到它的地方。
+        //
+        // 【必须用反射，不能 instanceof】源码里写的是 org.bukkit.craftbukkit.scheduler.CraftScheduler，
+        // 但打包时 CraftBukkit 会把包名重映射成 org.bukkit.craftbukkit.v1_8_R3.scheduler.*
+        // ⇒ 直接 instanceof 会加载一个运行时不存在的类，抛 NoClassDefFoundError 后被 catch 吞掉，
+        // 这一行就永远不打印（实测确认过产物里的路径带 v1_8_R3）。
+        try {
+            final Object scheduler = org.bukkit.Bukkit.getScheduler();
+            final java.lang.reflect.Method summary = scheduler.getClass().getMethod("asyncPoolSummary");
+            final java.lang.reflect.Method saturated = scheduler.getClass().getMethod("asyncPoolSaturated");
+            final boolean poolSaturated = Boolean.TRUE.equals(saturated.invoke(scheduler));
+            sender.sendMessage(ChatColor.AQUA + "Bukkit async pool: "
+                    + (poolSaturated ? ChatColor.RED : ChatColor.GREEN)
+                    + summary.invoke(scheduler));
+        } catch (Throwable unavailable) {
+            // 非 WindSpigot 核心或方法缺失：诊断读不到不影响其余输出
+            sender.sendMessage(ChatColor.AQUA + "Bukkit async pool: " + ChatColor.GRAY + "n/a");
+        }
+
         // Live TPS / MSPT (real server counters, never fabricated)
         final double tps1 = server.recentTps.length > 0 ? server.recentTps[0] : 20.0D;
         final double tps5 = server.recentTps.length > 1 ? server.recentTps[1] : tps1;

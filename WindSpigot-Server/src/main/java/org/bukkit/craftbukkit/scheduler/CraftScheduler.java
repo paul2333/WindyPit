@@ -89,13 +89,36 @@ public class CraftScheduler implements BukkitScheduler {
 	private static final long ASYNC_REJECTION_LOG_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30L);
 	private final AtomicInteger rejectedAsyncTaskCount = new AtomicInteger();
 	private final AtomicLong lastAsyncRejectionLogNanos = new AtomicLong();
-	private final ThreadPoolExecutor executor = new ThreadPoolExecutor(
-			Math.max(2, Math.min(Runtime.getRuntime().availableProcessors(), 8)),
-			Math.max(2, Math.min(Runtime.getRuntime().availableProcessors() * 2, 16)),
-			30L, TimeUnit.SECONDS,
-			new ArrayBlockingQueue<Runnable>(4096),
-			new com.google.common.util.concurrent.ThreadFactoryBuilder()
-					.setNameFormat("WindyPit Scheduler Thread - %1$d").setDaemon(true).build()); // bounded async scheduler
+	/**
+	 * 异步池线程数（2026-10-22 修复"池永远不扩容"）。
+	 *
+	 * <p>原配置是 core={@code min(cores,8)}、max={@code min(cores*2,16)} + 有界队列。
+	 * 但 {@link ThreadPoolExecutor} 只在<b>队列满</b>时才把线程数扩到 max，所以实际并发度
+	 * 永远等于 core —— 4 核机器只有 4 条异步线程。只要有任何插件把这几条线程长期占住
+	 * （真实事故：每首歌一条 {@code while + Thread.sleep} 的音乐播放器），全服所有
+	 * {@code runTaskAsynchronously} 就会永久排队：<b>不抛异常、不打日志</b>，
+	 * 表现为玩家卡「正在加载档案」、/login 与 /register 无响应。</p>
+	 *
+	 * <p>现在改为 core = max = clamp(cores*2, 4, 16)，并允许核心线程空闲超时回收：
+	 * 空闲时不占资源，繁忙时也不会因为"队列还没满"而拒绝扩容。</p>
+	 */
+	private static final int ASYNC_THREADS =
+			Math.max(4, Math.min(Runtime.getRuntime().availableProcessors() * 2, 16));
+	private static final int ASYNC_QUEUE_CAPACITY = 4096;
+
+	private static ThreadPoolExecutor newAsyncExecutor() {
+		final ThreadPoolExecutor pool = new ThreadPoolExecutor(
+				ASYNC_THREADS, ASYNC_THREADS,
+				30L, TimeUnit.SECONDS,
+				new ArrayBlockingQueue<Runnable>(ASYNC_QUEUE_CAPACITY),
+				new com.google.common.util.concurrent.ThreadFactoryBuilder()
+						.setNameFormat("WindyPit Scheduler Thread - %1$d").setDaemon(true).build(),
+				new ThreadPoolExecutor.AbortPolicy());
+		pool.allowCoreThreadTimeOut(true);
+		return pool;
+	}
+
+	private final ThreadPoolExecutor executor = newAsyncExecutor(); // bounded async scheduler
 	private static final Logger LOGGER = Logger.getLogger(CraftScheduler.class.getName());
 	private volatile boolean asyncExecutorShutdown;
 	private volatile boolean asyncExecutorShutdownTimedOut;
@@ -514,6 +537,46 @@ public class CraftScheduler implements BukkitScheduler {
 
 	public int pendingAsyncTaskCount() {
 		return executor.getQueue().size();
+	}
+
+	// ------------------------------------------------------------------
+	// 异步池诊断（2026-10-22）：插件 /tps 与 /windypit-tps 直接读这些计数。
+	// 之前这些数字完全不可见，所以"池被占满"只能靠猜。
+	// ------------------------------------------------------------------
+
+	public int asyncPoolActiveCount() {
+		return executor.getActiveCount();
+	}
+
+	public int asyncPoolQueueSize() {
+		return executor.getQueue().size();
+	}
+
+	public int asyncPoolCoreSize() {
+		return executor.getCorePoolSize();
+	}
+
+	public int asyncPoolMaxSize() {
+		return executor.getMaximumPoolSize();
+	}
+
+	public int asyncPoolRejectedCount() {
+		return rejectedAsyncTaskCount.get();
+	}
+
+	/** 饱和判定：所有线程都在忙且还有任务排队。 */
+	public boolean asyncPoolSaturated() {
+		return executor.getActiveCount() >= executor.getCorePoolSize() && !executor.getQueue().isEmpty();
+	}
+
+	/** 一行摘要，供 /windypit-tps 与启动日志使用。 */
+	public String asyncPoolSummary() {
+		return "asyncPool{active=" + executor.getActiveCount()
+				+ ", core=" + executor.getCorePoolSize()
+				+ ", max=" + executor.getMaximumPoolSize()
+				+ ", queued=" + executor.getQueue().size()
+				+ ", rejected=" + rejectedAsyncTaskCount.get()
+				+ ", saturated=" + asyncPoolSaturated() + "}";
 	}
 
 	private void addTask(final CraftTask task) {
