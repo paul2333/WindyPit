@@ -85,8 +85,10 @@ public class WindyPitTickIntegrationTest {
     }
 
     @Test
-    public void compatModeCreatesNoWorldOwnerDomains() {
-        WindyPitTickIntegration it = new WindyPitTickIntegration(WindyPitConfig.defaults());
+    public void compatModeCreatesNoWorldOwnerDomains() throws Exception {
+        // defaults() is REGION since 2026-10-22, so COMPAT must be requested explicitly.
+        WindyPitConfig compat = WindyPitConfig.parse("threading:\n  mode: compat\n");
+        WindyPitTickIntegration it = new WindyPitTickIntegration(compat);
         assertTrue("compat mode must not create world owner domains", it.worldRegions() == null);
     }
 
