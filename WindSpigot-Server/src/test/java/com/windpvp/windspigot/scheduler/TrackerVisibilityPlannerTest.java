@@ -3,6 +3,7 @@ package com.windpvp.windspigot.scheduler;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Arrays;
@@ -40,15 +41,39 @@ public class TrackerVisibilityPlannerTest {
         assertTrue(plan.lowLatency().isEmpty());
     }
 
+    /**
+     * 【2026-10-23 契约修正】low-latency 类型仍受距离剔除，只是**总是重算**。
+     *
+     * <p>原用例名 {@code lowLatencyTypesBypassDistanceCulling} 断言 500 格外的箭/TNT
+     * 对 viewDistance=48 的观察者可见。那正是缺陷本身：飞出视距的投掷物永远进不了
+     * removeList，会持续发包直到自然消失（PvP 服上箭/TNT 是高频实体）。</p>
+     *
+     * <p>正确语义：low-latency 只跳过"变更类别优化"（任何移动都重算），
+     * 可见性仍由距离决定。</p>
+     */
     @Test
-    public void lowLatencyTypesBypassDistanceCulling() {
-        TrackerVisibilityPlanner p = new TrackerVisibilityPlanner(TrackerVisibilityPlanner.defaultLowLatencyTypeIds(), null);
-        TrackerSnapshot snap = new TrackerSnapshot(1L, "arena",
+    public void lowLatencyTypesAreStillDistanceCulledButAlwaysRecomputed() {
+        TrackerVisibilityPlanner p = new TrackerVisibilityPlanner(
+                TrackerVisibilityPlanner.defaultLowLatencyTypeIds(), null);
+
+        // 视距内（viewDistance=48 格 → 半径 48；实体在 x=10）：可见，且标 lowLatency
+        TrackerSnapshot near = new TrackerSnapshot(1L, "arena",
+                Collections.singletonList(entity(3, 50, 10, 0, 0, 0f, 0f)),
+                Collections.singletonList(viewer(100, 0, 0, 0, 48)));
+        TrackerVisibilityPlanner.Plan nearPlan = p.plan(near, null, null);
+        assertEquals("视距内的 TNT 必须可见",
+                Collections.singletonList(3), nearPlan.add().get(100));
+        assertEquals("且被标记为 lowLatency",
+                Collections.singletonList(3), nearPlan.lowLatency());
+
+        // 视距外：不可见
+        TrackerSnapshot far = new TrackerSnapshot(2L, "arena",
                 Collections.singletonList(entity(3, 50, 500, 0, 0, 0f, 0f)),
                 Collections.singletonList(viewer(100, 0, 0, 0, 48)));
-        TrackerVisibilityPlanner.Plan plan = p.plan(snap, null, null);
-        assertEquals(Collections.singletonList(3), plan.add().get(100));
-        assertEquals(Collections.singletonList(3), plan.lowLatency());
+        TrackerVisibilityPlanner.Plan farPlan = p.plan(far, null, null);
+        assertTrue("飞出视距的 TNT 不得被加入可见集合",
+                farPlan.add().get(100).isEmpty());
+        assertTrue("也不得出现在 lowLatency 投递列表", farPlan.lowLatency().isEmpty());
     }
 
     @Test
@@ -61,6 +86,52 @@ public class TrackerVisibilityPlannerTest {
                 Collections.singletonList(viewer(100, 0, 0, 0, 48)));
         TrackerVisibilityPlanner.Plan plan = p.plan(snap, null, null);
         assertEquals(Collections.singletonList(1), plan.add().get(100));
+    }
+
+    @Test
+    public void visibilityPlanCapturesVisibleSetForNextTick() {
+        TrackerVisibilityPlanner p = new TrackerVisibilityPlanner(null, null);
+        TrackerSnapshot snap = new TrackerSnapshot(1L, "arena",
+                Arrays.asList(entity(7, 1, 5, 0, 0, 0f, 0f), entity(8, 1, 500, 0, 0, 0f, 0f)),
+                Collections.singletonList(viewer(100, 0, 0, 0, 48)));
+
+        TrackerVisibilityPlanner.Plan plan = p.planVisibility(snap, null);
+        assertEquals("the plan must carry the visible set for the next tick",
+                Collections.singleton(7), plan.visible().get(100));
+        assertTrue("the first plan has no trustworthy previous visibility", plan.resync());
+
+        TrackerSnapshot next = new TrackerSnapshot(2L, "arena",
+                Arrays.asList(entity(7, 1, 6, 0, 0, 0f, 0f), entity(8, 1, 500, 0, 0, 0f, 0f)),
+                Collections.singletonList(viewer(100, 0, 0, 0, 48)));
+        TrackerVisibilityPlanner.Plan nextPlan = p.planVisibility(next, snap, plan.visible());
+        assertTrue("a still-visible entity must not be re-added",
+                nextPlan.add().get(100).isEmpty());
+        assertTrue("a still-hidden entity must not be removed",
+                nextPlan.remove().get(100).isEmpty());
+        assertEquals(Collections.singleton(7), nextPlan.visible().get(100));
+        assertFalse("a carried previous visible set is not a resync", nextPlan.resync());
+        assertTrue("a lost previous visible set forces a resync",
+                p.planVisibility(next, snap, null).resync());
+    }
+
+    @Test
+    public void visibilityOnlyPlanSkipsChangeClassTables() {
+        TrackerVisibilityPlanner p = new TrackerVisibilityPlanner(null, null);
+        TrackerSnapshot prev = new TrackerSnapshot(1L, "arena",
+                Collections.singletonList(entity(7, 1, 0, 0, 0, 0f, 0f)),
+                Collections.singletonList(viewer(100, 0, 0, 0, 48)));
+        TrackerSnapshot cur = new TrackerSnapshot(2L, "arena",
+                Collections.singletonList(entity(7, 1, 5, 0, 0, 0f, 0f)),
+                Collections.singletonList(viewer(100, 0, 0, 0, 48)));
+
+        TrackerVisibilityPlanner.Plan plan = p.planVisibility(cur, prev);
+        TrackerVisibilityPlanner.Plan full = p.plan(cur, prev, null);
+
+        assertEquals("add/remove must match the full plan", full.add().get(100), plan.add().get(100));
+        assertEquals("add/remove must match the full plan", full.remove().get(100), plan.remove().get(100));
+        assertTrue("visibility-only must not build moved", plan.moved().isEmpty());
+        assertTrue("visibility-only must not build rotatedOnly", plan.rotatedOnly().isEmpty());
+        assertTrue("visibility-only must not build lowLatency", plan.lowLatency().isEmpty());
     }
 
     @Test
@@ -126,15 +197,30 @@ public class TrackerVisibilityPlannerTest {
         assertTrue(plan.add().get(100).isEmpty());
     }
 
+    /**
+     * 【2026-10-23 同上】带 lowLatency 标志的实体同样受距离剔除。
+     *
+     * <p>原用例 {@code lowLatencyFlagBypassesCullingWithoutTypeId} 断言 x=500 处
+     * （viewDistance=48）的实体可见 —— 与按类型判定那条是同一个错误。</p>
+     */
     @Test
-    public void lowLatencyFlagBypassesCullingWithoutTypeId() {
+    public void lowLatencyFlagDoesNotOverrideDistanceCulling() {
         TrackerVisibilityPlanner p = new TrackerVisibilityPlanner(null, null);
-        TrackerSnapshot snap = new TrackerSnapshot(1L, "arena",
+
+        // 视距内（viewDistance=48 → 半径 min(48, 32) = 32；实体在 x=10）：可见
+        TrackerSnapshot near = new TrackerSnapshot(1L, "arena",
+                Collections.singletonList(new TrackerSnapshot.EntityView(5, 0, 10, 0, 0, 0f, 0f, false, 32, true)),
+                Collections.singletonList(viewer(100, 0, 0, 0, 48)));
+        TrackerVisibilityPlanner.Plan nearPlan = p.plan(near, null, null);
+        assertEquals("视距内的 lowLatency 实体必须可见",
+                Collections.singletonList(5), nearPlan.add().get(100));
+
+        // 视距外：不可见
+        TrackerSnapshot far = new TrackerSnapshot(2L, "arena",
                 Collections.singletonList(new TrackerSnapshot.EntityView(5, 0, 500, 0, 0, 0f, 0f, false, 32, true)),
                 Collections.singletonList(viewer(100, 0, 0, 0, 48)));
-        TrackerVisibilityPlanner.Plan plan = p.plan(snap, null, null);
-        assertEquals(Collections.singletonList(5), plan.add().get(100));
-        assertEquals(Collections.singletonList(5), plan.lowLatency());
+        TrackerVisibilityPlanner.Plan farPlan = p.plan(far, null, null);
+        assertTrue("lowLatency 标志不得覆盖距离剔除", farPlan.add().get(100).isEmpty());
     }
 
     @Test
