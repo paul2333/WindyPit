@@ -73,6 +73,17 @@ public final class WorldRegionRuntime {
          *         tracker rejected the plan (counted as a failure and resynced next tick).
          */
         boolean apply(String worldName, TrackerVisibilityPlanner.Plan plan);
+
+        /**
+         * Visibility the next plan may use as carry-forward after {@link #apply} returned true.
+         * The production applier removes pairs whose add was rejected by the tracker's
+         * chunk-pending gate; those must stay absent so the next plan retries the add. The
+         * default keeps test/legacy appliers publishing the plan's intent unchanged.
+         */
+        default Map<Integer, Set<Integer>> visibleAfterApply(String worldName,
+                                                             TrackerVisibilityPlanner.Plan plan) {
+            return plan.visible();
+        }
     }
 
     /** Immutable result of one owner-domain planning pass. */
@@ -80,11 +91,25 @@ public final class WorldRegionRuntime {
         private final String worldName;
         private final long generation;
         private final TrackerVisibilityPlanner.Plan visibility;
+        /**
+         * 生成这份计划时用的快照。
+         *
+         * <p>【2026-10-23】它必须随计划一起传到应用侧：`state.previous` 原来在**入队时**
+         * 就推进，但入队≠会被应用。现在只在计划**真正应用成功**后，用这里的快照
+         * 去推进 previous，保证基线一定是"客户端实际已经看到的那一帧"。</p>
+         */
+        private final TrackerSnapshot snapshot;
 
-        Plan(String worldName, long generation, TrackerVisibilityPlanner.Plan visibility) {
+        Plan(String worldName, long generation, TrackerVisibilityPlanner.Plan visibility,
+             TrackerSnapshot snapshot) {
             this.worldName = worldName;
             this.generation = generation;
             this.visibility = visibility;
+            this.snapshot = snapshot;
+        }
+
+        Plan(String worldName, long generation, TrackerVisibilityPlanner.Plan visibility) {
+            this(worldName, generation, visibility, null);
         }
 
         public String worldName() {
@@ -97,6 +122,10 @@ public final class WorldRegionRuntime {
 
         public TrackerVisibilityPlanner.Plan visibility() {
             return visibility;
+        }
+
+        public TrackerSnapshot snapshot() {
+            return snapshot;
         }
     }
 
@@ -162,9 +191,25 @@ public final class WorldRegionRuntime {
         final LongAdder failed = new LongAdder();
         volatile TrackerSnapshot previous;
         // Published by the primary thread only after the plan was applied to the live tracker.
-        // The generation check makes the pair (previous snapshot, applied visible set) consistent.
+        // It describes the tracker state used as the next plan's carry-forward baseline.
         volatile Map<Integer, Set<Integer>> appliedVisible;
-        volatile long appliedVisibleGeneration = -1L;
+
+        /**
+         * 【2026-10-23 修复：跨线程丢失更新】
+         *
+         * <p>原来"丢弃/失败后强制全量重同步"是靠 worker 线程直接写 {@code previous = null}。
+         * 但主线程在入队成功后也会写 {@code previous = current}，两个线程无保护地写同一个
+         * volatile 字段 —— 主线程这一次赋值会把 worker 刚设的 {@code null} <b>覆盖掉</b>。</p>
+         *
+         * <p>后果：安全网失效。下一 tick 会拿一个"从未被应用过"的 previous 去算 add/remove，
+         * 于是该移除的残留成员被漏掉（该消失的实体一直在客户端），
+         * 而且这种错误会持续累积、现场极难复现。</p>
+         *
+         * <p>改为单向标志：worker 只置位，主线程在 {@code applyPending} 里消费并清位。
+         * 这样"请求重同步"与"推进 previous"不再争抢同一个字段。</p>
+         */
+        volatile boolean resyncRequested;
+
         volatile boolean active = true;
         volatile long appliedGeneration;
 
@@ -176,7 +221,6 @@ public final class WorldRegionRuntime {
 
         void clearAppliedVisible() {
             appliedVisible = null;
-            appliedVisibleGeneration = -1L;
         }
     }
 
@@ -289,6 +333,33 @@ public final class WorldRegionRuntime {
     }
 
     /**
+     * Drops the plan baseline and any already-computed plans after the tracker had to fall back
+     * to legacy add/remove. The next snapshot is planned with {@code previous == null}, which
+     * forces a full resync and reconciles pairs the fallback may have changed.
+     *
+     * <p>Must be called on the primary thread. The owner may still be computing a plan from an
+     * older snapshot; region FIFO ordering puts it before the resync plan, so the resync applies
+     * last and clears anything stale.</p>
+     */
+    public void forceResync(String worldName) {
+        if (closed || worldName == null) {
+            return;
+        }
+        final WorldState state = byWorld.get(worldName);
+        if (state == null) {
+            return;
+        }
+        state.previous = null;
+        state.clearAppliedVisible();
+        final int dropped = state.completed.size();
+        if (dropped > 0) {
+            state.completed.clear();
+            state.dropped.add(dropped);
+            droppedTotal.addAndGet(dropped);
+        }
+    }
+
+    /**
      * Submits one planning job for the world. Must be called on the primary thread with an
      * immutable snapshot built after the world tick.
      */
@@ -306,8 +377,11 @@ public final class WorldRegionRuntime {
             return false;
         }
         final TrackerSnapshot previous = state.previous;
+        // appliedVisible describes the tracker state after the last successfully applied plan,
+        // not necessarily the previous snapshot. A lagging owner can leave previous newer than
+        // the last applied plan; that is still the correct carry-forward baseline and must not
+        // be mistaken for a lost baseline (which would force a full O(V*E) resync every tick).
         final Map<Integer, Set<Integer>> priorVisible = previous != null
-                && state.appliedVisibleGeneration == previous.generation()
                 ? state.appliedVisible : null;
         final long generation = snapshot.generation();
         final TrackerSnapshot current = snapshot;
@@ -325,31 +399,39 @@ public final class WorldRegionRuntime {
                             observer.onPlanComputed(worldName, Thread.currentThread().getName(),
                                     startedNanos, System.nanoTime() - startedNanos);
                         }
-                        final Plan result = new Plan(worldName, generation, plan);
+                        final Plan result = new Plan(worldName, generation, plan, current);
                         if (!state.completed.offer(result)) {
-                            // Bounded queue full: drop visibly and force a full resync next tick.
+                            // Bounded queue full: drop visibly and ask for a full resync next tick.
+                            // 【2026-10-23】worker 不再直接写 previous（会被主线程覆盖），
+                            // 只置单向标志，由 applyPending 在主线程消费。
                             state.dropped.increment();
                             droppedTotal.incrementAndGet();
-                            state.previous = null;
-                            state.clearAppliedVisible();
+                            state.resyncRequested = true;
                         }
                     } catch (Throwable t) {
                         state.failed.increment();
                         failedTotal.incrementAndGet();
-                        state.previous = null;
-                        state.clearAppliedVisible();
+                        // 同上：单一写者原则，worker 只置位。
+                        state.resyncRequested = true;
                     }
                 }
             });
             state.submitted.increment();
-            // Advance only after a successful enqueue; a lost plan resets to a full resync.
-            state.previous = current;
+            // 【2026-10-23】这里**不再**推进 state.previous。
+            //
+            // 原来在入队成功后立刻 `state.previous = current`，但"入队成功"不等于
+            // "计划会被应用"：完成队列可能满、worker 可能挂、主线程可能没跑到
+            // applyPending。那样下一 tick 就会用一个**从未被应用过**的快照当基线
+            // 去算 add/remove，导致该移除的残留成员被漏掉。
+            // 而且这次主线程写入还会覆盖 worker 置的 resync 请求（详见 resyncRequested）。
+            //
+            // 现在 previous 只在 applyPending **真正应用成功之后**推进；
+            // 未被应用的快照不会被当成基线。
             return true;
         } catch (RejectedTaskException e) {
             state.rejected.increment();
             rejectedTotal.incrementAndGet();
-            state.previous = null;
-            state.clearAppliedVisible();
+            state.resyncRequested = true;
             return false;
         }
     }
@@ -446,11 +528,18 @@ public final class WorldRegionRuntime {
             }
             if (ok) {
                 state.appliedGeneration = plan.generation();
-                // Publish only after the plan was applied: the next tick's previousVisible is
-                // guaranteed to describe the tracker state the client actually has.
-                state.appliedVisible = plan.visibility().visible();
-                state.appliedVisibleGeneration = state.appliedVisible == null
-                        ? -1L : plan.generation();
+                // Publish only after the plan was applied. The applier may remove pairs whose
+                // add was rejected by the tracker's chunk-pending gate; keeping those out of
+                // carry-forward is what makes the next plan retry them.
+                final Map<Integer, Set<Integer>> appliedVisible =
+                        applier.visibleAfterApply(worldName, plan.visibility());
+                state.appliedVisible = appliedVisible;
+                // 【2026-10-23】previous 只在这里推进 —— 基线必须是"客户端确实已收到的那一帧"。
+                // 原来在入队时就推进，而队列满/worker 挂掉时计划根本不会到达这里，
+                // 下一 tick 就会拿一个从未被应用的快照去算 add/remove，漏掉该移除的成员。
+                if (plan.snapshot() != null) {
+                    state.previous = plan.snapshot();
+                }
                 state.applied.increment();
                 appliedTotal.incrementAndGet();
                 applied++;
@@ -459,7 +548,16 @@ public final class WorldRegionRuntime {
                 failedTotal.incrementAndGet();
                 state.previous = null;
                 state.clearAppliedVisible();
+                // 应用失败：请求下一 tick 全量重同步（与 worker 侧同一个标志，主线程在此消费）。
+                state.resyncRequested = true;
             }
+        }
+        // 消费 worker 侧置的重同步请求：一旦被请求，就丢掉基线，
+        // 让下一 tick 走一次无条件全量重算，而不是基于可疑的 previous 做增量。
+        if (state.resyncRequested) {
+            state.resyncRequested = false;
+            state.previous = null;
+            state.clearAppliedVisible();
         }
         return applied;
     }
