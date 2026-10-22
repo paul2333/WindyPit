@@ -1,23 +1,32 @@
-
-# WindyPit threading configuration
+# Sample WindyPit threading section for a ThePitUltimate server (one populated world).
+# The server reads windypit.yml from its working directory; missing keys use the code defaults.
 threading:
-  mode: REGION  # COMPAT: single-threaded (baseline) | REGION: multi-threaded visibility planning (1.75-2.50× speedup)
-  region-threads: 4  # Number of owner threads (recommended: CPU cores / 2)
-  arena-owner: PRIMARY  # PRIMARY: arena on main thread | DEDICATED: arena on dedicated thread
+  # REGION: tracker visibility planning ("who should see whom") runs on a world owner thread
+  # against an immutable snapshot; world/entity ticks and packet sends stay on the main thread.
+  # COMPAT: everything on the main thread (rollback path).
+  mode: REGION
+  # Upper bound on owner threads. Domains are created per registered world, and a world with
+  # no players submits no work, so one thread covers the ThePit layout. Raise it only when
+  # several worlds hold players at the same time.
+  region-threads: 1
+  # PRIMARY: ThePit arena work runs on the main thread (same thread as Bukkit). DEDICATED is
+  # opt-in and has not been runtime-verified with ThePitUltimate.
+  arena-owner: PRIMARY
+  # ComputePool workers, created on first use. ThePitUltimate splits bot AI into 4 slices per
+  # tick (AI_SLICES=4), so more than 4 workers adds no bot-AI parallelism; its other jobs are
+  # short per-player scoreboard refreshes. "auto" = CPU cores / 2.
+  compute-threads: 4
 
 features:
-  async-entity-tracking: true  # Enable async entity tracking (required for REGION mode)
-
+  # Must stay true for REGION mode to plan visibility off the main thread.
+  async-entity-tracking: true
   # Mechanism pruning (drop unnecessary ticks in PvP-only regions)
   mechanism-pruning: true
 
 rollback:
   # Force arena to run on primary thread (emergency rollback)
   force-primary-thread-arena: false
-
   # Disable async tracking (rollback to sync-only)
   disable-async-tracking: false
-
   # Disable region scheduler (rollback to compat mode)
   disable-region-scheduler: false
-

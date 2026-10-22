@@ -20,10 +20,14 @@ import java.util.Set;
  * WindyPit threading / feature / pruning / rollback configuration (W5-CONFIG).
  *
  * <p>Parsed from windypit.yml on the server classpath. Every field has a safe default so a
- * missing or partial file always yields a valid configuration (compat/primary/true).</p>
+ * missing or partial file always yields a valid configuration (region/primary/1 owner thread).</p>
  *
- * <p>Development and canary default: mode=compat, arena-owner=primary. The release build switches
- * to region/dedicated only after every owner-thread, runtime and stress gate passes.</p>
+ * <p>Default: mode=region, arena-owner=primary, region-threads=1. REGION only moves tracker
+ * visibility planning onto an owner thread; world ticks, entity ticks and packet sends stay on
+ * the primary thread. One owner thread covers a single populated world (the ThePit layout);
+ * {@code region-threads} is an upper bound, domains are created only for registered worlds.
+ * {@code mode: compat} or the rollback switches restore the fully single-threaded path.
+ * arena-owner=dedicated stays opt-in until it has its own runtime evidence.</p>
  *
  * <p>Mechanism pruning has a global default per mechanism plus optional per-world overrides. The
  * override merge rule is: explicit world value, else explicit global value, else the built-in
@@ -186,7 +190,7 @@ public final class WindyPitConfig {
 
     public static WindyPitConfig defaults() {
         return new WindyPitConfig(
-            new ThreadingConfig(ThreadingMode.REGION, ArenaOwner.PRIMARY, 4, "auto"),
+            new ThreadingConfig(ThreadingMode.REGION, ArenaOwner.PRIMARY, 1, "auto"),
             new FeaturesConfig(true, true),
             new RollbackConfig(false, false, false),
             new PruningConfig(new LinkedHashMap<String, Boolean>(), new LinkedHashMap<String, Map<String, Boolean>>(),
@@ -229,7 +233,7 @@ public final class WindyPitConfig {
     private static WindyPitConfig fromYaml(org.bukkit.configuration.ConfigurationSection yaml) {
         ThreadingMode mode = parseEnum(yaml, "threading.mode", ThreadingMode.REGION);
         ArenaOwner arenaOwner = parseEnum(yaml, "threading.arena-owner", ArenaOwner.PRIMARY);
-        int regionThreads = yaml.getInt("threading.region-threads", 4);
+        int regionThreads = yaml.getInt("threading.region-threads", 1);
         String computeThreads = yaml.getString("threading.compute-threads", "auto");
 
         ThreadingConfig threading = new ThreadingConfig(mode, arenaOwner,

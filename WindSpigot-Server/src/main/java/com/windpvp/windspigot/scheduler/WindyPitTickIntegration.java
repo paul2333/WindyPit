@@ -14,13 +14,13 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>Two execution modes:</p>
  * <ul>
- *   <li><b>COMPAT</b> (default): no dedicated world owner threads are created, the shared arena
- *       is pumped on the primary thread and the vanilla tracker path is untouched.</li>
- *   <li><b>REGION</b>: one or more dedicated {@link WorldRegionRuntime} owner domains are created
- *       from {@code threading.region-threads}. Each world's owner thread runs real
- *       {@link TrackerVisibilityPlanner} work against immutable snapshots; the primary thread
- *       applies the resulting plan to the NMS tracker. The shared ThePit arena remains a single
- *       owner (pumped on the primary thread by default).</li>
+ *   <li><b>COMPAT</b>: no dedicated world owner threads are created, the shared arena is pumped
+ *       on the primary thread and the vanilla tracker path is untouched.</li>
+ *   <li><b>REGION</b> (default): dedicated {@link WorldRegionRuntime} owner domains are created
+ *       lazily per registered world, capped by {@code threading.region-threads}. Each world's
+ *       owner thread runs real {@link TrackerVisibilityPlanner} work against immutable snapshots;
+ *       the primary thread applies the resulting plan to the NMS tracker. The shared ThePit arena
+ *       remains a single owner (pumped on the primary thread by default).</li>
  * </ul>
  *
  * <p>NMS/Bukkit objects never leave the primary thread: only immutable {@link TrackerSnapshot}
