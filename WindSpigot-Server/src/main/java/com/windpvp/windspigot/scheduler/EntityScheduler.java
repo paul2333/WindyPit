@@ -66,8 +66,21 @@ public final class EntityScheduler {
             if (b.pendingTokens.size() < b.pendingTokensCapacity) {
                 b.pendingTokens.add(token);
             } else {
+                // 【2026-10-23 修复：溢出 token 必须拒绝，不能"照常调度但不跟踪"】
+                //
+                // 原来是 `b.pendingTokensOverflow++` 然后继续 schedule，
+                // 注释写着 "cleanup responsibility transferred to task itself" ——
+                // 但**没有任何代码承担这个责任**：
+                //   - `unregisterEntity` 只遍历 `pendingTokens`，看不到溢出 token；
+                //   - 于是实体被移除后，这个 body 仍会在 region 线程上执行，
+                //     去改动一个已经不存在的实体（陈旧工作）。
+                //
+                // 容量语义是"允许为单个实体排队的任务上限"，超了就该**拒绝**这次调度
+                // （并 retire 刚建的 token），而不是把不受管的任务放出去。
+                // 调用方拿到已 retire 的 token 可以自行识别本次未被受理。
                 b.pendingTokensOverflow++;
-                // Token not tracked; cleanup responsibility transferred to task itself
+                token.retire();
+                return token;
             }
         }
         scheduler.schedule(b.region, body, token);
