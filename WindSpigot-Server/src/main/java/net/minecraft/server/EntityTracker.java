@@ -47,16 +47,35 @@ public class EntityTracker {
 	 * {@code entry.update(0)} 路径。宁可短暂多花一点 CPU，也不能让整世界的实体消失。</p>
 	 *
 	 * <p>用时间戳而不是 tick 序号：本类拿不到可靠的世界 tick 计数，
-	 * 而墙钟语义在"服务端卡顿"时同样有效（卡顿本身也不该让实体消失）。</p>
+	 * 而单调时钟语义在"服务端卡顿"时同样有效（卡顿本身也不该让实体消失）。</p>
+	 *
+	 * <p>【2026-10-24】字段改名并改用 {@code nanoTime}，原因见
+	 * {@link #lastPlanAppliedNanos} 的说明 —— 墙上时钟会被 NTP 回拨，
+	 * 那会让兜底逻辑在最需要它的时候失效。</p>
 	 */
-	private volatile long lastPlanAppliedMillis = 0L;
-
-	/** 计划流中断多久后自动退回原版可见性（毫秒）。1000ms ≈ 20 tick。 */
 	private static final long PLAN_STALL_MILLIS = 1000L;
+
+	/** 纳秒 → 毫秒。用 nanoTime 做差再换算，避免依赖墙上时钟。 */
+	private static final long NANOS_PER_MILLI = 1_000_000L;
+
+	/**
+	 * 最近一次"计划流确认存活"的单调时间戳（{@link System#nanoTime()} 纳秒）。
+	 *
+	 * <p>【2026-10-24 修复：改用单调时钟，避免 NTP 回拨导致永不判定停滞】</p>
+	 *
+	 * <p>原来记的是 {@code System.currentTimeMillis()}。墙上时钟可能被 NTP 校正
+	 * <b>往回拨</b>——一旦发生，{@code now - last} 变成负数，永远不可能大于
+	 * {@link #PLAN_STALL_MILLIS}，于是 {@code planStalled()} 恒为 false，
+	 * tracker 永远走 movement-only、add/remove 永不执行。</p>
+	 *
+	 * <p>这正好与"卡顿也要退回可用路径"的设计意图相反：越需要兜底的时刻，
+	 * 兜底越失效。{@code nanoTime()} 是单调递增的，不受系统时钟调整影响。</p>
+	 */
+	private volatile long lastPlanAppliedNanos = 0L;
 
 	/** 由 tick 集成在世界 owner 线程应用计划成功后调用。 */
 	public void markPlanApplied() {
-		this.lastPlanAppliedMillis = System.currentTimeMillis();
+		this.lastPlanAppliedNanos = System.nanoTime();
 	}
 
 	public boolean isPlanDrivenVisibility() {
@@ -66,7 +85,7 @@ public class EntityTracker {
 	public void setPlanDrivenVisibility(boolean planDrivenVisibility) {
 		this.planDrivenVisibility = planDrivenVisibility;
 		// 开启时把基线拉到"现在"，避免刚开启就被判定为停滞。
-		this.lastPlanAppliedMillis = System.currentTimeMillis();
+		this.lastPlanAppliedNanos = System.nanoTime();
 	}
 
 	/**
@@ -75,13 +94,14 @@ public class EntityTracker {
 	 * @return true 表示应当忽略 planDriven、走 {@code entry.update(0)}
 	 */
 	private boolean planStalled() {
-		final long last = this.lastPlanAppliedMillis;
+		final long last = this.lastPlanAppliedNanos;
 		if (last <= 0L) {
 			// 从未收到过计划：开启后立刻就该有基线（setPlanDrivenVisibility 已拉齐），
 			// 走到这里说明 baseline 丢失，按停滞处理以保安全。
 			return true;
 		}
-		return System.currentTimeMillis() - last > PLAN_STALL_MILLIS;
+		// nanoTime 保证单调：差值不会为负，NTP 回拨也不会让兜底失效。
+		return (System.nanoTime() - last) / NANOS_PER_MILLI > PLAN_STALL_MILLIS;
 	}
 	// WindyPit end
 	
