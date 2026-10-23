@@ -63,6 +63,22 @@ public final class EntityScheduler {
         }
         final TaskRetirementToken token = TaskRetirementToken.create();
         synchronized (b) {
+            // 【2026-10-24 修复：已完成的 token 一直占着槽位，长生命周期实体最终永久无法调度】
+            //
+            // `pendingTokens` 原来只在 `unregisterEntity` 里清空。而实体在整个生命周期内
+            // 会不断 `scheduleForEntity`，每次往里加一个 token —— **执行完也不摘除**。
+            // 于是累计排到 `pendingTokensCapacity`（默认 256）次之后，这个实体就永远
+            // 落进下面的溢出分支：每次调度都被 retire，body 一次也不执行。
+            //
+            // 对玩家/长期存在的实体来说这不是理论问题：256 次调度在几分钟内就会用完，
+            // 之后该实体的 region 任务全部静默失效。
+            //
+            // 修复：每次调度前先摘掉已完成/已退休的 token。
+            // 这样 pendingTokens 的语义回归为"当前真正待执行的队列"，
+            // 容量上限才名副其实 —— 它限制的是**在途任务数**，不是实体寿命内的累计次数。
+            if (!b.pendingTokens.isEmpty()) {
+                b.pendingTokens.removeIf(t -> t.isCompleted() || t.isRetired());
+            }
             if (b.pendingTokens.size() < b.pendingTokensCapacity) {
                 b.pendingTokens.add(token);
             } else {
