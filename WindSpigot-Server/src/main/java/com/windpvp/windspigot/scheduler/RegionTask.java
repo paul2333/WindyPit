@@ -37,9 +37,29 @@ public final class RegionTask {
         return token;
     }
 
-    /** @return true if the body ran, false when the task was retired before execution. */
+    /**
+     * 执行任务体。
+     *
+     * <p>【2026-10-24 修复：检查与执行之间有竞态窗口】</p>
+     *
+     * <p>原来是：</p>
+     * <pre>
+     *   if (token != null &amp;&amp; token.isRetired()) return false;   // ← 检查
+     *   body.run();                                            // ← 使用
+     * </pre>
+     *
+     * <p>{@code retire()} 可能正好落在这两步之间 —— 于是
+     * {@code EntityScheduler.unregisterEntity} 已经判定"这个实体没了、别再跑它的活"，
+     * 而 body 照样执行，去改动一个已不存在的实体（陈旧工作）。
+     * 轻则空转，重则改到复用同一 id 的新实体。</p>
+     *
+     * <p>现在改为向 token 抢占执行权（单变量 CAS）：抢占成功才跑，
+     * 抢占失败说明已被取消，直接跳过。二者真正互斥。</p>
+     *
+     * @return true if the body ran, false when the task was retired before execution.
+     */
     public boolean execute() {
-        if (token != null && token.isRetired()) {
+        if (token != null && !token.tryBeginExecution()) {
             return false;
         }
         body.run();
