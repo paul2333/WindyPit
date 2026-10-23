@@ -59,6 +59,14 @@ public final class SchedulerDiagnostics {
         final LongAdder executed = new LongAdder();
         final LongAdder rejected = new LongAdder();
         final LongAdder retired = new LongAdder();
+        /**
+         * 任务抛异常被 {@code RegionThread#runTask} 兜住的次数。
+         *
+         * <p>【2026-10-24 新增】原本 region 任务抛异常会直接杀死 owner 线程且不留痕迹
+         * （loop 的 catch 只接 InterruptedException）。现在异常被捕获并且每次自增 ——
+         * 有这个计数才能发现"某个 region 持续失败但线程还活着"。</p>
+         */
+        final LongAdder failed = new LongAdder();
         volatile int maxQueueDepth;
 
         void noteDepth(int depth) {

@@ -134,13 +134,51 @@ final class RegionThread {
         return null;
     }
 
+    /**
+     * 执行一个 region 任务。
+     *
+     * <p>【2026-10-24 修复：单个任务抛异常会永久杀死该 world 的 owner 线程】</p>
+     *
+     * <p>原实现直接 {@code t.execute()}，没有任何 try/catch；而 {@link #loop()} 的
+     * try 只捕获 {@link InterruptedException}。于是 region 工作线程里任一任务抛出的
+     * {@code RuntimeException}/{@code Error} 会穿过 {@code loop()} 直接终结该线程。</p>
+     *
+     * <p>后果是<b>静默的</b>：线程死了以后，{@code stopRequested} 仍是 false、队列仍能写入，
+     * 所以 {@code RegionScheduler.schedule()} 照常 {@code scheduled.increment()} 并返回
+     * 一个 RegionTask —— 但任务永远不会被执行。要等到 64 深度的队列被填满，
+     * 才开始抛 {@code RejectedTaskException}。生产表现就是"world-owner-N 线程消失、
+     * 那个世界的实体彻底不更新"，而日志里只有一条第一次的堆栈。</p>
+     *
+     * <p>对比同包的 {@code ComputePool#execute} 是有 {@code catch (Throwable)} 的。</p>
+     */
     private void runTask(RegionTask t) {
         SchedulerDiagnostics.RegionCounters c = diag.countersFor(region.id());
-        boolean ran = t.execute();
+        final boolean ran;
+        try {
+            ran = t.execute();
+        } catch (Throwable failure) {
+            // 一个坏任务不能带走整个 region 的执行线程。
+            c.failed.increment();
+            try {
+                ThePitThreadLog.failure(region, failure);
+            } catch (Throwable loggingFailure) {
+                // 记录失败绝不能反过来再抛一次。
+            }
+            return;
+        }
         if (ran) {
             c.executed.increment();
         } else {
             c.retired.increment();
+        }
+    }
+
+    /** 失败日志收口：只在必要时构造字符串，避免热路径开销。 */
+    private static final class ThePitThreadLog {
+        static void failure(OwnedRegion region, Throwable failure) {
+            java.util.logging.Logger.getLogger("WindyPit-Region")
+                    .log(java.util.logging.Level.SEVERE,
+                            "region task failed on " + region.id() + "; thread kept alive", failure);
         }
     }
 }
