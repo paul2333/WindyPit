@@ -607,6 +607,31 @@ public final class WorldRegionRuntime {
         return s == null ? null : s.domain.region;
     }
 
+    /**
+     * 该世界的计划**应用失败**累计次数。
+     *
+     * <p>【2026-10-24 新增】`WorldTicker` 需要区分三种情况：</p>
+     * <ol>
+     *   <li>本 tick 没有新计划可应用 —— 健康状态的正常空窗，<b>不应</b>算停滞；</li>
+     *   <li>提交失败（队列满/已关闭）—— 原来的判据已覆盖；</li>
+     *   <li><b>有计划、但 applier.apply 返回 false</b> —— 原来漏掉了这一种。</li>
+     * </ol>
+     *
+     * <p>第 3 种如果持续发生（例如 tracker/world 引用拿不到），原来会因为
+     * `submitWorld` 仍每 tick 成功而不断刷新"计划存活"时间戳 ⇒ `planStalled()`
+     * 永远 false ⇒ tracker 永远走 movement-only、add/remove 永不执行 ⇒
+     * 该世界实体对所有人永久不可见且不自愈。</p>
+     *
+     * <p>暴露这个计数后，`WorldTicker` 只要比较前后值，就能在不误判空窗的前提下
+     * 把"应用失败"也纳入停滞判定。</p>
+     *
+     * @return 未注册的世界返回 0
+     */
+    public long applyFailureCount(String worldName) {
+        final WorldState s = byWorld.get(worldName);
+        return s == null ? 0L : s.failed.sum();
+    }
+
     public boolean isClosed() {
         return closed;
     }

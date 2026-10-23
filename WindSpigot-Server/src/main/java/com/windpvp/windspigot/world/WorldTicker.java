@@ -107,9 +107,11 @@ public class WorldTicker implements Runnable, WorldTrackerTick.Target {
 				? null : MinecraftServer.getServer().getWindyTick();
 		final WorldRegionRuntime worldRegions = integration == null ? null : integration.worldRegions();
 		final boolean ownerPlans = worldRegions != null && worldRegions.isRegistered(worldName);
+		final long applyFailuresBefore = ownerPlans ? worldRegions.applyFailureCount(worldName) : 0L;
 		if (ownerPlans) {
 			worldRegions.applyPending(worldName);
 		}
+		final boolean applyFailedThisTick = ownerPlans && worldRegions.applyFailureCount(worldName) > applyFailuresBefore;
 		WorldTrackerTick.run(this);
 		if (ownerPlans) {
 			// 【2026-10-23 可用性修复】把"计划流是否还活着"回报给 tracker。
@@ -122,7 +124,21 @@ public class WorldTicker implements Runnable, WorldTrackerTick.Target {
 			// 计划是异步产出的，健康状态下也会有"本 tick 没有新计划可应用"的正常空窗，
 			// 用 applied > 0 会误判为停滞。真正的中断是**连提交都失败**（队列满/已关闭）
 			// 且持续超过阈值 —— 那才是必须退回原版的时刻。
-			if (worldRegions.submitWorld(worldserver)) {
+			//
+			// 【2026-10-24 补丁：还要排除"有计划但应用失败"这一种情况】
+			// 上面的推理只覆盖了"没有新计划"与"提交失败"，漏了第三种：
+			// **有最新计划、`applier.apply` 却持续返回 false**（plan/server/world/tracker
+			// 为 null）。此时 `applyPending` 走 `resyncRequested = true` 重试，
+			// 而 `submitWorld` 每 tick 仍返回 true 刷新时间戳 ⇒ `planStalled()` 永远 false
+			// ⇒ tracker 永远走 updateMovementOnly、add/remove 永不发生 ⇒
+			// 那个世界的实体对所有人永久不可见，且不会自愈。
+			//
+			// 所以：本 tick 若发生应用失败，就**不刷新**时间戳。
+			// 单个 tick 失败不会立刻判停滞（阈值 1 秒 = 20 tick），
+			// 只有持续失败才会触发回退 —— 既不误判空窗，又给"永久失败"留了出口。
+			if (applyFailedThisTick) {
+				// 有意不刷新：让 planStalled 能随持续失败累积到阈值，退回 legacy 路径。
+			} else if (worldRegions.submitWorld(worldserver)) {
 				worldserver.getTracker().markPlanApplied();
 			}
 		}
